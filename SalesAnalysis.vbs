@@ -137,70 +137,76 @@ If XlsxToCsv(in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file) < 0 Then
     WScript.Quit 1
 End If
 
-Dim colOrder, colLine, colStatus, colStatusSIOP, colOrderPos, colItem1, colItem2
-Dim colQtyOrdered, colUM,colUnitPrice, colOrderDate, colDueDate
-Dim colMonth, colYear, colMY, colFY, colName, colOrderType, colNetPrice, colUnitCost
-Dim colCurrency1, colCurrency2, colNetPriceEur, colNetPriceUsd, colProductLine
-Dim fileText, lines, headerFields, headerIndex, columnCount
-Dim orderLinesDict, orderLinesHeader
-Dim rowFields, newRow, keyValue
-Dim dueYear, yearFrom, yearTo, statusValue, dateValue
-Dim qtyOrdered, invoiced, unitPrice, netPrice, updatedQty, recalcNetPrice
-Dim idxDueDate, idxStatus, idxNetPrice, idxQtyOrdered, idxInvoiced, idxUnitPrice, idxOrder, idxLine
-Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsBadNumber, rowsDuplicate, j
-Dim requiredCols
+Dim colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM
+Dim colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency
+Dim fileText, lines, headerFields, headerIndex, columnCount, requiredCols
+Dim orderLinesDict, rowFields, newRow, masterRow, keyValue
+Dim idxOrder, idxLine, idxStatus, idxItem1, idxItem2, idxQtyOrdered, idxUM
+Dim idxUnitPrice, idxOrderDate, idxDueDate, idxInvoiced, idxName, idxNetPrice, idxCurrency
+Dim yearFrom, yearTo, dueYear, dueMonth, dateValue, statusValue, monthYear
+Dim qtyOrdered, invoiced, netPrice, converted, lookupValue
+Dim fxDict, orderTypeDict, aopDict, productLineDict
+Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsDuplicate
+Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader
 
-' header names exactly as XlsxToCsv wrote them into the CSV 
-colOrder       = "Order"
-colLine        = "Line"
-colStatus      = "Status"
-colStatusSIOP  = "Status SIOP"
-colOrderPos    = "Order + Pos"
-colItem1       = "Item"
-colItem2       = "Item2"
-colQtyOrdered  = "Qty Ordered"
-colUM          = "U/M"
-colUnitPrice   = "Unit Price"
-colOrderDate   = "Order Date"
-colDueDate     = "Due Date"
-colMonth       = "Month"
-colYear        = "Year"
-colMY          = "M+Y"
-colFY          = "FY"
-colName        = "Name"
-colOrderType   = "Order Type"
-colNetPrice    = "Net Price"
-colCurrency   = "Currency"
-colNetPriceEur = "Net Price EUR"
-colNetPriceUsd = "Net Price USD"
-colProductLine = "Product Line"
+colOrder = "Order"
+colLine = "Line"
+colStatus = "Status"
+colItem1 = "Item"
+colItem2 = "Item_2"
+colQtyOrdered = "Qty Ordered"
+colUM = "U/M"
+colUnitPrice = "Unit Price"
+colOrderDate = "Order Date"
+colDueDate = "Due Date"
 colInvoiced = "Invoiced"
-colQtyOrdInvoiced = "Qty Ordered-Invoiced"
+colName = "Name"
+colNetPrice = "Net Price"
+colCurrency = "Currency"
+masterHeader = Array("Order", "Line", "Status (SL)", "Status SIOP", "Order + Pos", "Item", "Item_2", "Qty Ordered", "U/M", "Unit Price", "Order Date", "Due Date", _
+                    "Month", "Year", "M+Y", "FY", "Name", "Order type", "Net Price", "Currency", "Net Price EUR", "Net Price USD", "Product Line", "Qty Difference")
+
+Const M_ORDER = 0      : Const M_LINE = 1       : Const M_STATUS = 2
+Const M_STATUSSIOP = 3 : Const M_ORDERPOS = 4   : Const M_ITEM1 = 5
+Const M_ITEM2 = 6      : Const M_QTY = 7        : Const M_UM = 8
+Const M_UNITPRICE = 9  : Const M_ORDERDATE = 10 : Const M_DUEDATE = 11
+Const M_MONTH = 12     : Const M_YEAR = 13      : Const M_MY = 14
+Const M_FY = 15        : Const M_NAME = 16      : Const M_ORDERTYPE = 17
+Const M_NETPRICE = 18  : Const M_CURRENCY = 19  : Const M_NPEUR = 20
+Const M_NPUSD = 21     : Const M_PRODLINE = 22  : Const M_QTYDIFF = 23
+
+Set fxDict = inputData("FX")
+Set orderTypeDict = inputData("OrderType")
+Set aopDict = inputData("AOP")
+Set productLineDict = inputData("ProductLine")
 
 fileText = ReadUtf8(out_Csv_file)
-    If Trim(fileText) = "" Then
-        WriteLog "CustOrderLines CSV is empty or unreadable: " & out_Csv_file
-        MsgBox "The converted CustomerOrderLines CSV is empty.", vbCritical, "Sales Analysis"
-        WScript.Quit 1
-    End If
+If Trim(fileText) = "" Then
+    WriteLog "CustOrderLines CSV is empty or unreadable: " & out_Csv_file
+    MsgBox "The converted CustomerOrderLines CSV is empty.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+
 fileText = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
 lines = Split(fileText, vbLf)
 headerFields = Split(Trim(lines(0)), delimiter)
 columnCount = UBound(headerFields) + 1
-
 Set headerIndex = CreateObject("Scripting.Dictionary")
 headerIndex.CompareMode = vbTextCompare
+
 For i = 0 To UBound(headerFields)
     If Not headerIndex.Exists(Trim(headerFields(i))) Then
         headerIndex.Add Trim(headerFields(i)), i
     End If
 Next
 
-requiredCols = Array(colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM, colUnitPrice, colOrderDate, colDueDate, colName, colNetPrice, colCurrency, colInvoiced)
+requiredCols = Array(colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM, colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency)
 
 For i = 0 To UBound(requiredCols)
     If Not headerIndex.Exists(requiredCols(i)) Then
         WriteLog "CustOrderLines: column '" & requiredCols(i) & "' not found. Header: " & lines(0)
+        MsgBox "CustomerOrderLines is missing column '" & requiredCols(i) & "'.", _
+               vbCritical, "Sales Analysis"
         WScript.Quit 1
     End If
 Next
@@ -208,8 +214,6 @@ Next
 idxOrder = headerIndex(colOrder)
 idxLine = headerIndex(colLine)
 idxStatus = headerIndex(colStatus)
-idxStatusSIOP = headerIndex(colStatusSIOP)
-idxOrderPos = headerIndex(colOrderPos)
 idxItem1 = headerIndex(colItem1)
 idxItem2 = headerIndex(colItem2)
 idxQtyOrdered = headerIndex(colQtyOrdered)
@@ -217,119 +221,126 @@ idxUM = headerIndex(colUM)
 idxUnitPrice = headerIndex(colUnitPrice)
 idxOrderDate = headerIndex(colOrderDate)
 idxDueDate = headerIndex(colDueDate)
-idxMonth = headerIndex(colMonth)
-idxYear = headerIndex(colYear)
-idxMY = headerIndex(colMY)
-idxFY = headerIndex(colFY)
-idxName = headerIndex(colName)
-idxOrderType = headerIndex(colOrderType)
-idxNetPrice = headerIndex(colNetPrice)
-idxCurrency2 = headerIndex(colCurrency)
-idxNetPriceEur = headerIndex(colNetPriceEur)
-idxNetPriceUsd = headerIndex(colNetPriceUsd)
-idxProductLine = headerIndex(colProductLine)
 idxInvoiced = headerIndex(colInvoiced)
-idxQtyOrdInvoiced = headerIndex(colQtyOrdInvoiced)
- ' filter 2025 - 2027
+idxName = headerIndex(colName)
+idxNetPrice = headerIndex(colNetPrice)
+idxCurrency = headerIndex(colCurrency)
 yearFrom = Year(Date) - 1
 yearTo   = Year(Date) + 1
 
 Set orderLinesDict = CreateObject("Scripting.Dictionary")
 orderLinesDict.CompareMode = vbTextCompare
-rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0 : rowsBadNumber = 0 : rowsDuplicate = 0
+rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0
+rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
 
-'za svaku liniju iz csv file, podjeljenu sa novim redtkom
 For i = 1 To UBound(lines)
-    If Trim(lines(i)) <> "" Then
-        rowFields = Split(lines(i), delimiter)
+ If Trim(lines(i)) <> "" Then
+    rowFields = Split(lines(i), delimiter)
+    ReDim newRow(columnCount - 1)
 
-        ' Pad to full width once, plus two slots for the derived columns, so
-        ' nothing below needs a bounds check. Trailing empty fields get
-        ' dropped by Split, which is why short rows happen at all.
-        ReDim newRow(columnCount + 1)
-        For j = 0 To columnCount - 1
-            If j <= UBound(rowFields) Then
-                newRow(j) = Trim(rowFields(j))
-            Else
-                newRow(j) = ""
-            End If
+    For j = 0 To columnCount - 1
+        If j <= UBound(rowFields) Then 
+            newRow(j) = Trim(rowFields(j)) 
+        Else 
+            newRow(j) = ""
+        End If 
+    Next
+
+    statusValue = UCase(newRow(idxStatus))
+    dateValue   = newRow(idxDueDate)
+    dueYear = 0
+     If Len(dateValue) >= 7 Then
+        If IsNumeric(Left(dateValue, 4)) Then dueYear = CLng(Left(dateValue, 4))
+     End If
+
+    netPrice = ToNumber(newRow(idxNetPrice))
+    qtyOrdered = ToNumber(newRow(idxQtyOrdered))
+    invoiced = ToNumber(newRow(idxInvoiced))
+
+    If statusValue <> "ORDERED" And statusValue <> "PLANNED" Then
+        rowsBadStatus = rowsBadStatus + 1
+    ElseIf dueYear < yearFrom Or dueYear > yearTo Then
+        rowsOutOfWindow = rowsOutOfWindow + 1
+    ElseIf statusValue = "PLANNED" And Not IsNull(netPrice) And netPrice = 0 Then
+        rowsPlannedZero = rowsPlannedZero + 1
+    Else
+        ReDim masterRow(UBound(masterHeader))
+        For j = 0 To UBound(masterRow)
+            masterRow(j) = ""              ' unmapped columns stay blank, never 0
         Next
 
-        ' --- filter 1: status ------------------------------------------------
-        statusValue = UCase(newRow(idxStatus))
-         If statusValue <> "ORDERED" And statusValue <> "PLANNED" Then
-            rowsBadStatus = rowsBadStatus + 1
-         Else
-            ' --- filter 2: Due Date window ------------------------------------
-            ' Year read straight off the ISO string that XlsxToCsv wrote.
-            ' CDate follows the machine's regional settings and would misread
-            ' or throw on this format.
-            dateValue = newRow(idxDueDate)
-            dueYear = 0
-            If Len(dateValue) >= 4 Then
-                If IsNumeric(Left(dateValue, 4)) Then 
-                    dueYear = CLng(Left(dateValue, 4))
-                End If
+        masterRow(M_ORDER) = newRow(idxOrder)
+        masterRow(M_LINE) = newRow(idxLine)
+        masterRow(M_STATUS) = newRow(idxStatus)
+        masterRow(M_STATUSSIOP) = "Orderbook"
+        masterRow(M_ORDERPOS) = newRow(idxOrder) & newRow(idxLine)
+        masterRow(M_ITEM1) = newRow(idxItem1)
+        masterRow(M_ITEM2) = newRow(idxItem2)
+        masterRow(M_QTY) = newRow(idxQtyOrdered)
+        masterRow(M_UM) = newRow(idxUM)
+        masterRow(M_UNITPRICE) = newRow(idxUnitPrice)
+        masterRow(M_ORDERDATE) = newRow(idxOrderDate)
+        masterRow(M_DUEDATE) = dateValue
+        masterRow(M_NAME) = newRow(idxName)
+        masterRow(M_NETPRICE) = newRow(idxNetPrice)
+        masterRow(M_CURRENCY) = newRow(idxCurrency)
+        dueMonth  = CLng(Mid(dateValue, 6, 2))        ' "07" -> 7
+        monthYear = CStr(dueMonth) & CStr(dueYear)
+        masterRow(M_MONTH) = CStr(dueMonth)
+        masterRow(M_YEAR) = CStr(dueYear)
+        masterRow(M_MY) = monthYear
+        If aopDict.Exists(monthYear) Then
+            masterRow(M_FY) = aopDict(monthYear)("FY")
+        Else
+            rowsNoFY = rowsNoFY + 1
+        End If
+
+        lookupValue = Trim(newRow(idxName))
+        If orderTypeDict.Exists(lookupValue) Then
+            masterRow(M_ORDERTYPE) = orderTypeDict(lookupValue)
+        Else
+            masterRow(M_ORDERTYPE) = "OEM"
+        End If
+
+        lookupValue = Trim(newRow(idxItem2))
+        If productLineDict.Exists(lookupValue) Then
+            masterRow(M_PRODLINE) = productLineDict(lookupValue)
+        Else
+            rowsNoProductLine = rowsNoProductLine + 1
+        End If
+
+        If Not IsNull(netPrice) Then
+            converted = ConvertCurrency(newRow(idxCurrency), "EUR", netPrice, fxDict)
+            If IsNull(converted) Then
+                rowsNoRate = rowsNoRate + 1
+            Else
+                masterRow(M_NPEUR) = Replace(CStr(converted), ",", ".")
             End If
 
-            If dueYear < yearFrom Or dueYear > yearTo Then
-                rowsOutOfWindow = rowsOutOfWindow + 1
-            Else
-                qtyOrdered = ToNumber(newRow(idxQtyOrdered))
-                unitPrice  = ToNumber(newRow(idxUnitPrice))
-                netPrice   = ToNumber(newRow(idxNetPrice))
-                invoiced   = ToNumber(newRow(idxInvoiced))
-
-                If IsNull(invoiced) Then invoiced = 0
-
-                ' A missing Qty Ordered or Unit Price is a data fault. Letting
-                ' those default to 0 would silently produce Updated Qty = 0.
-                If IsNull(qtyOrdered) Or IsNull(unitPrice) Then '? mozda nije bug
-                    rowsBadNumber = rowsBadNumber + 1
-                    WriteLog "CustOrderLines line " & (i + 1) & ": unreadable " & colQtyOrdered & "='" & newRow(idxQtyOrdered) & "' " & colUnitPrice & "='" & newRow(idxUnitPrice) & "'"
-                Else
-                    If IsNull(netPrice) Then netPrice = 0
-
-                    ' --- filter 3: Planned with zero Net Price ------------------
-                    If statusValue = "PLANNED" And netPrice = 0 Then
-                        rowsPlannedZero = rowsPlannedZero + 1
-                    Else
-                        ' --- derived columns ------------------------------------
-                        updatedQty = qtyOrdered - invoiced
-                        recalcNetPrice = Round(unitPrice * updatedQty, 2)
-                         If updatedQty < 0 Then
-                            WriteLog "CustOrderLines line " & (i + 1) & ": invoiced " & invoiced & " exceeds ordered " & qtyOrdered
-                         End If
- 
-                        newRow(columnCount) = Replace(CStr(updatedQty), ",", ".")
-                        newRow(columnCount + 1) = Replace(CStr(recalcNetPrice), ",", ".")
-
-                        ' --- key -------------------------------------------------
-                        ' Chr(1) separator so Order 12 + Line 1 cannot collide
-                        ' with Order 1 + Line 21.
-                        keyValue = UCase(newRow(idxOrder)) & Chr(1) & UCase(newRow(idxLine))
-
-                        If orderLinesDict.Exists(keyValue) Then
-                            rowsDuplicate = rowsDuplicate + 1
-                            WriteLog "CustOrderLines line " & (i + 1) & ": duplicate key " & Replace(keyValue, Chr(1), " + ")
-                        End If
-
-                        orderLinesDict(keyValue) = newRow
-                        rowsKept = rowsKept + 1
-                    End If
-                End If
+            converted = ConvertCurrency(newRow(idxCurrency), "USD", netPrice, fxDict)
+            If Not IsNull(converted) Then
+                masterRow(M_NPUSD) = Replace(CStr(converted), ",", ".")
             End If
         End If
+
+        If Not IsNull(qtyOrdered) Then
+            If IsNull(invoiced) Then invoiced = 0
+            masterRow(M_QTYDIFF) = Replace(CStr(qtyOrdered - invoiced), ",", ".")
+        End If
+
+        keyValue = UCase(newRow(idxOrder)) & Chr(1) & UCase(newRow(idxLine))
+        If orderLinesDict.Exists(keyValue) Then rowsDuplicate = rowsDuplicate + 1
+
+        orderLinesDict(keyValue) = masterRow
+        rowsKept = rowsKept + 1
     End If
+ End If
 Next
 
+WriteLog "CustOrderLines: kept " & orderLinesDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 
-
-
-
-
-
+bjorn file now!
 
 
 
