@@ -1,18 +1,68 @@
 KillProcess("excel.exe")
+'napravit scriptu za izmjenu naziva kolona u skinutim fajlicama
+'dodat renaming klijenata u unificirani naziv isto u pre-skriptu
 
+Dim colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM
+Dim colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency
+Dim fileText, lines, headerFields, headerIndex, columnCount, requiredCols
+Dim orderLinesDict, rowFields, newRow, keyValue
+Dim idxOrder, idxLine, idxStatus, idxItem1, idxItem2, idxQtyOrdered, idxUM
+Dim idxUnitPrice, idxOrderDate, idxDueDate, idxInvoiced, idxName, idxNetPrice, idxCurrency
+Dim yearFrom, yearTo, dueYear, dueMonth, dateValue, statusValue, monthYear
+Dim qtyOrdered, invoiced, netPrice, converted, lookupValue
+Dim fxDict, orderTypeDict, aopDict, productLineDict
+Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsDuplicate
+Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader
+Dim masterSourceCols, mstrIdx, mstrLines, mstrFields, mstrHeaderIdx
+Dim masterDict, mstrRow, mstrKey, mstrCsv
+Dim mstrDate, mstrYear, mstrMonth, mstrMY, mstrQty, mstrInvoiced, mstrNetPrice, mstrCurrency
+Dim mstrBlankKey, mstrDupe, sheet_map, inputBook, dvsXl, dvsWb, dvsWs
+Dim sheetNames, inputData, sheetData, missingSheets, sheetName, i
 Dim shell, rootFolder, masterCsvFile, in_Xlsx_file, out_Csv_file
 Dim fso, inputFolder, archiveFolder, outputFolder, delimiter
-'shareFolder = "P:\!04_Sales\"                                   '  Share folder location
+Const map_SHEET = 0
+Const map_HDRROW = 1
+Const map_FIRSTROW = 2
+Const map_LASTCOL = 3
+Const map_KEYCOLS = 4
+Const map_VALUECOL = 5
+
+colOrder = "Order"
+colLine = "Line"
+colStatus = "Status"
+colItem1 = "Item"
+colItem2 = "Item_2"
+colQtyOrdered = "Qty Ordered"
+colUM = "U/M"
+colUnitPrice = "Unit Price"
+colOrderDate = "Order Date"
+colDueDate = "Due Date"
+colInvoiced = "Invoiced"
+colName = "Name"
+colNetPrice = "Net Price"
+colCurrency = "Currency"
+masterHeader = Array("Order", "Line", "Status (SL)", "Status SIOP", "Order + Pos", "Item", "Item_2", "Qty Ordered", "U/M", "Unit Price", "Order Date", "Due Date",              "Month", "Year", "M+Y", "FY", "Name", "Order type", "Net Price", "Currency", "Net Price EUR", "Net Price USD", "Product Line", "Qty Difference")
+
+Const M_ORDER = 0      : Const M_LINE = 1       : Const M_STATUS = 2
+Const M_STATUSSIOP = 3 : Const M_ORDERPOS = 4   : Const M_ITEM1 = 5
+Const M_ITEM2 = 6      : Const M_QTY = 7        : Const M_UM = 8
+Const M_UNITPRICE = 9  : Const M_ORDERDATE = 10 : Const M_DUEDATE = 11
+Const M_MONTH = 12     : Const M_YEAR = 13      : Const M_MY = 14
+Const M_FY = 15        : Const M_NAME = 16      : Const M_ORDERTYPE = 17
+Const M_NETPRICE = 18  : Const M_CURRENCY = 19  : Const M_NPEUR = 20
+Const M_NPUSD = 21     : Const M_PRODLINE = 22  : Const M_QTYDIFF = 23
+
 Set shell = CreateObject("WScript.Shell")
 rootFolder = shell.CurrentDirectory & "\"
 inputFolder = rootFolder & "Input"
 archiveFolder = rootFolder & "Archive"
 outputFolder = rootFolder & "Output"
 masterCsvFile = rootFolder & "MasterData.csv"
-masterSrcFileName = "Base SIOP test"
+masterSrcFileName = "Base SIOP July 2026"
 masterSrcFileExt = ".xlsx"
 masterSrcFilePath = inputFolder & "\" & masterSrcFileName & masterSrcFileExt
 destArchFileLoc = archiveFolder & "\" & masterSrcFileName & "_" & TimeStamp() & ".xlsx"
+delimiter = "|"
 
 WriteLog "Process started."
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -45,22 +95,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
     On Error GoTo 0
 '############################################# Load all Input.xlsx sheets into Dictionary #############################################
 
-Dim sheet_map
-Dim inputBook, dvsXl, dvsWb, dvsWs
-Dim sheetNames, inputData, sheetData, missingSheets, sheetName, i
-Const map_SHEET = 0
-Const map_HDRROW = 1
-Const map_FIRSTROW = 2
-Const map_LASTCOL = 3
-Const map_KEYCOLS = 4
-Const map_VALUECOL = 5
-
-sheet_map = Array(Array("FX", 1, 2,  2, "Currency", "Value"), _
-                  Array("OrderType", 1, 2,  2, "Spares customers", "Column2"), _
-                  Array("AOP", 1, 2,  4, "Month|Year", ""), _
-                  Array("NRCs", 1, 2,  7, "", ""), _ 
-                  Array("OtherForcast", 1, 2, 10, "", ""), _
-                  Array("ProductLine", 1, 2, 3, "Desc", "Clasification"))
+sheet_map = Array(Array("FX", 1, 2, 3, "From Currency|To Currency", "Value"),            Array("OrderType", 1, 2, 2, "Spares customers", "Value"),            Array("AOP", 1, 2, 5, "Concate", ""),            Array("OtherForcast&NRC", 1, 2, 10, "", ""),            Array("ProductLine", 1, 2, 3, "Desc", "Clasification"))
 
 inputBook = inputFolder & "\Input.xlsx"
 
@@ -126,54 +161,95 @@ Next
 On Error GoTo 0
 CleanUpExcel dvsXl, dvsWb
 
+'############################# Load master (Orderbook) -> dictionary #############################
+
+masterSourceCols = Array("Order","Line","Status (SL)","Status SIOP","Order + Pos","Item","Item_2","Qty Ordered","U/M", _
+    "Unit Price","Order Date","Due Date","Month","Year","M+Y","FY","Name","Order type","Net Price", _
+    "Currency","Net Price EUR","Net Price USD","Product Line","")
+
+mstrCsv = outputFolder & "\MasterCurrent.csv"
+If XlsxToCsv(masterSrcFilePath, "SIOP", 4, 1, 0, delimiter, mstrCsv) < 0 Then
+    MsgBox "Could not read the master file. See log.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+
+fileText = ReadUtf8(mstrCsv)
+If Trim(fileText) = "" Then
+    WriteLog "Master CSV is empty: " & mstrCsv
+    MsgBox "The master file produced no rows.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+
+fileText  = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
+mstrLines = Split(fileText, vbLf)
+mstrFields = Split(Trim(mstrLines(0)), delimiter)
+
+Set mstrHeaderIdx = CreateObject("Scripting.Dictionary")
+mstrHeaderIdx.CompareMode = vbTextCompare
+For i = 0 To UBound(mstrFields)
+    If Not mstrHeaderIdx.Exists(Trim(mstrFields(i))) Then
+        mstrHeaderIdx.Add Trim(mstrFields(i)), i
+    End If
+Next
+
+ReDim mstrIdx(UBound(masterHeader))
+
+For j = 0 To UBound(masterHeader)
+    If masterSourceCols(j) = "" Then
+        mstrIdx(j) = -1
+    ElseIf Not mstrHeaderIdx.Exists(masterSourceCols(j)) Then
+        WriteLog "Master: column '" & masterSourceCols(j) & "' not found in Orderbook."
+        MsgBox "Master is missing column '" & masterSourceCols(j) & "'.", vbCritical, "Sales Analysis"
+        WScript.Quit 1
+    Else
+        mstrIdx(j) = mstrHeaderIdx(masterSourceCols(j))
+    End If
+Next
+
+
+Set masterDict = CreateObject("Scripting.Dictionary")
+masterDict.CompareMode = vbTextCompare
+mstrBlankKey = 0 : mstrDupe = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
+
+For i = 1 To UBound(mstrLines)
+ If Trim(mstrLines(i)) <> "" Then
+
+    rowFields = Split(mstrLines(i), delimiter)
+    ReDim masterRow(UBound(masterHeader))
+
+    For j = 0 To UBound(masterHeader)
+        If mstrIdx(j) = -1 Then
+            masterRow(j) = ""
+        ElseIf mstrIdx(j) <= UBound(rowFields) Then
+            masterRow(j) = Trim(rowFields(mstrIdx(j)))
+        Else
+            masterRow(j) = ""
+        End If
+    Next
+
+    If masterRow(M_ORDER) = "" And masterRow(M_LINE) = "" Then
+        mstrBlankKey = mstrBlankKey + 1
+    Else
+
+    mstrKey = UCase(masterRow(M_ORDER)) & Chr(1) & UCase(masterRow(M_LINE))
+    If masterDict.Exists(mstrKey) Then mstrDupe = mstrDupe + 1
+       masterDict(mstrKey) = masterRow
+    End If
+ End If
+Next
+
+WriteLog "Master loaded: " & masterDict.Count & " keys | blank keys " & mstrBlankKey &          " | duplicate keys " & mstrDupe & " | no FY " & rowsNoFY &          " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 '############################################# Convert XLSX to CSV - Customer Order Lines Export file #############################################
 in_Xlsx_file = inputFolder & "\CustomerOrderLinesExport33.xlsx"
 out_Csv_file = outputFolder & "\CustomerOrderLinesExport.csv"
-delimiter = "|"
+
 'XlsxToCsv in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file
 If XlsxToCsv(in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file) < 0 Then
     MsgBox "Could not convert CustomerOrderLinesExport. See log.", vbCritical, "Sales Analysis"
     WScript.Quit 1
 End If
 
-Dim colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM
-Dim colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency
-Dim fileText, lines, headerFields, headerIndex, columnCount, requiredCols
-Dim orderLinesDict, rowFields, newRow, masterRow, keyValue
-Dim idxOrder, idxLine, idxStatus, idxItem1, idxItem2, idxQtyOrdered, idxUM
-Dim idxUnitPrice, idxOrderDate, idxDueDate, idxInvoiced, idxName, idxNetPrice, idxCurrency
-Dim yearFrom, yearTo, dueYear, dueMonth, dateValue, statusValue, monthYear
-Dim qtyOrdered, invoiced, netPrice, converted, lookupValue
-Dim fxDict, orderTypeDict, aopDict, productLineDict
-Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsDuplicate
-Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader
-
-colOrder = "Order"
-colLine = "Line"
-colStatus = "Status"
-colItem1 = "Item"
-colItem2 = "Item_2"
-colQtyOrdered = "Qty Ordered"
-colUM = "U/M"
-colUnitPrice = "Unit Price"
-colOrderDate = "Order Date"
-colDueDate = "Due Date"
-colInvoiced = "Invoiced"
-colName = "Name"
-colNetPrice = "Net Price"
-colCurrency = "Currency"
-masterHeader = Array("Order", "Line", "Status (SL)", "Status SIOP", "Order + Pos", "Item", "Item_2", "Qty Ordered", "U/M", "Unit Price", "Order Date", "Due Date", _
-                    "Month", "Year", "M+Y", "FY", "Name", "Order type", "Net Price", "Currency", "Net Price EUR", "Net Price USD", "Product Line", "Qty Difference")
-
-Const M_ORDER = 0      : Const M_LINE = 1       : Const M_STATUS = 2
-Const M_STATUSSIOP = 3 : Const M_ORDERPOS = 4   : Const M_ITEM1 = 5
-Const M_ITEM2 = 6      : Const M_QTY = 7        : Const M_UM = 8
-Const M_UNITPRICE = 9  : Const M_ORDERDATE = 10 : Const M_DUEDATE = 11
-Const M_MONTH = 12     : Const M_YEAR = 13      : Const M_MY = 14
-Const M_FY = 15        : Const M_NAME = 16      : Const M_ORDERTYPE = 17
-Const M_NETPRICE = 18  : Const M_CURRENCY = 19  : Const M_NPEUR = 20
-Const M_NPUSD = 21     : Const M_PRODLINE = 22  : Const M_QTYDIFF = 23
 
 Set fxDict = inputData("FX")
 Set orderTypeDict = inputData("OrderType")
@@ -205,8 +281,7 @@ requiredCols = Array(colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrd
 For i = 0 To UBound(requiredCols)
     If Not headerIndex.Exists(requiredCols(i)) Then
         WriteLog "CustOrderLines: column '" & requiredCols(i) & "' not found. Header: " & lines(0)
-        MsgBox "CustomerOrderLines is missing column '" & requiredCols(i) & "'.", _
-               vbCritical, "Sales Analysis"
+        MsgBox "CustomerOrderLines is missing column '" & requiredCols(i) & "'.", vbCritical, "Sales Analysis"
         WScript.Quit 1
     End If
 Next
@@ -230,8 +305,7 @@ yearTo   = Year(Date) + 1
 
 Set orderLinesDict = CreateObject("Scripting.Dictionary")
 orderLinesDict.CompareMode = vbTextCompare
-rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0
-rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
+rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0 : rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
 
 For i = 1 To UBound(lines)
  If Trim(lines(i)) <> "" Then
@@ -266,7 +340,7 @@ For i = 1 To UBound(lines)
     Else
         ReDim masterRow(UBound(masterHeader))
         For j = 0 To UBound(masterRow)
-            masterRow(j) = ""              ' unmapped columns stay blank, never 0
+            masterRow(j) = ""
         Next
 
         masterRow(M_ORDER) = newRow(idxOrder)
@@ -284,7 +358,7 @@ For i = 1 To UBound(lines)
         masterRow(M_NAME) = newRow(idxName)
         masterRow(M_NETPRICE) = newRow(idxNetPrice)
         masterRow(M_CURRENCY) = newRow(idxCurrency)
-        dueMonth  = CLng(Mid(dateValue, 6, 2))        ' "07" -> 7
+        dueMonth  = CLng(Mid(dateValue, 6, 2))
         monthYear = CStr(dueMonth) & CStr(dueYear)
         masterRow(M_MONTH) = CStr(dueMonth)
         masterRow(M_YEAR) = CStr(dueYear)
@@ -340,65 +414,546 @@ Next
 WriteLog "CustOrderLines: kept " & orderLinesDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 
-bjorn file now!
+'############################################# Loading - Bjorn file #######################################################################################################################################
+Dim bjornHeaderIndex, colCalendarYear, idxCalendarYear
+
+fileText = ""
+lines = ""
+headerFields = ""
+columnCount = ""
+
+in_Xlsx_file = inputFolder & "\4.1 MS-Ger_SalesAnalysis_TCONT_GR_APP-June 2026 YTD.xlsm"
+out_Csv_file = outputFolder & "\Bjorn.csv"
 
 
+If XlsxToCsv(in_Xlsx_file, "Sales Analysis", 1, 1, 0, delimiter, out_Csv_file) < 0 Then
+    MsgBox "Could not convert Bjorn file -add filename. See log.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+
+colOrder = "Order"
+colLine = "Order Line"
+colItem1 = "Item"
+colItem2 = "Description"
+colQtyOrdered = "Qty"
+colUnitPrice = "Unit Price"
+colDueDate = "Invoice Date"
+colName = "Name"
+colNetPrice = "DOM Ext Price"
+colNetPriceUSD = "USD Sales"
+colCalendarYear = "Calendar Year"
+
+fileText = ReadUtf8(out_Csv_file)
+If Trim(fileText) = "" Then
+    WriteLog "Bjorn CSV is empty or unreadable: " & out_Csv_file
+    MsgBox "The converted Bjorn CSV is empty.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
 
 
+fileText = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
+lines = Split(fileText, vbLf)
+headerFields = Split(Trim(lines(0)), delimiter)
+columnCount = UBound(headerFields) + 1
+Set bjornHeaderIndex = CreateObject("Scripting.Dictionary")
+bjornHeaderIndex.CompareMode = vbTextCompare
 
+For i = 0 To UBound(headerFields)
+    If Not bjornHeaderIndex.Exists(Trim(headerFields(i))) Then
+        bjornHeaderIndex.Add Trim(headerFields(i)), i
+    End If
+Next
 
+requiredCols = Array(colOrder, colLine, colItem1, colItem2, colQtyOrdered, colUnitPrice, colDueDate, colName, colNetPrice, colCalendarYear)
 
+For i = 0 To UBound(requiredCols)
+    If Not bjornHeaderIndex.Exists(requiredCols(i)) Then
+        WriteLog "Bjorn: column '" & requiredCols(i) & "' not found. Header: " & lines(0)
+        MsgBox "Bjorn is missing column '" & requiredCols(i) & "'.", vbCritical, "Sales Analysis"
+        WScript.Quit 1
+    End If
+Next
 
+idxOrder = bjornHeaderIndex(colOrder)
+idxLine = bjornHeaderIndex(colLine)
+idxItem1 = bjornHeaderIndex(colItem1)
+idxItem2 = bjornHeaderIndex(colItem2)
+idxQtyOrdered = bjornHeaderIndex(colQtyOrdered)
+idxUnitPrice = bjornHeaderIndex(colUnitPrice)
+idxDueDate = bjornHeaderIndex(colDueDate)
+idxName = bjornHeaderIndex(colName)
+idxNetPrice = bjornHeaderIndex(colNetPrice)
+idxNetPriceUSD = bjornHeaderIndex(colNetPriceUSD)
+idxCalendarYear = bjornHeaderIndex(colCalendarYear)
+yearFrom = Year(Date) - 1
+yearTo   = Year(Date)
 
+Set bjornDict = CreateObject("Scripting.Dictionary")
+bjornDict.CompareMode = vbTextCompare
+rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0 : rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
 
+For i = 1 To UBound(lines)
+ If Trim(lines(i)) <> "" Then
+    rowFields = Split(lines(i), delimiter)
+    ReDim newRow(columnCount - 1)
 
+    For j = 0 To columnCount - 1
+        If j <= UBound(rowFields) Then 
+            newRow(j) = Trim(rowFields(j)) 
+        Else 
+            newRow(j) = ""
+        End If 
+    Next
 
+    dateValue = newRow(idxDueDate)
+    dueYear = 0
+     If Len(dateValue) >= 7 Then
+        If IsNumeric(Left(dateValue, 4)) Then dueYear = CLng(Left(dateValue, 4))
+     End If
 
+    netPrice = ToNumber(newRow(idxNetPrice))
+    qtyOrdered = ToNumber(newRow(idxQtyOrdered))
 
+    ReDim masterRow(UBound(masterHeader))
+    For j = 0 To UBound(masterRow)
+        masterRow(j) = ""
+    Next
 
+    masterRow(M_ORDER) = newRow(idxOrder)
+    masterRow(M_LINE) = newRow(idxLine)
+    masterRow(M_STATUS) = ""
+    masterRow(M_STATUSSIOP) = "Target"
+    masterRow(M_ORDERPOS) = ""
+    masterRow(M_ITEM1) = newRow(idxItem1)
+    masterRow(M_ITEM2) = newRow(idxItem2)
+    masterRow(M_QTY) = newRow(idxQtyOrdered)
+    masterRow(M_UM) =  ""
+    masterRow(M_UNITPRICE) = newRow(idxUnitPrice)
+    masterRow(M_ORDERDATE) =  ""
+    masterRow(M_DUEDATE) = dateValue
+    masterRow(M_NAME) = newRow(idxName)
+    masterRow(M_NETPRICE) = newRow(idxNetPrice)
+    masterRow(M_CURRENCY) = "EUR"
+    dueMonth  = CLng(Mid(dateValue, 6, 2))
+    monthYear = CStr(dueMonth) & CStr(dueYear)
+    masterRow(M_MONTH) = CStr(dueMonth)
+    masterRow(M_YEAR) = CStr(dueYear)
+    masterRow(M_MY) = monthYear
+    If aopDict.Exists(monthYear) Then
+        masterRow(M_FY) = aopDict(monthYear)("FY")
+    Else
+        rowsNoFY = rowsNoFY + 1
+    End If
 
+    lookupValue = Trim(newRow(idxName))
+    If orderTypeDict.Exists(lookupValue) Then
+        masterRow(M_ORDERTYPE) = orderTypeDict(lookupValue)
+    Else
+        masterRow(M_ORDERTYPE) = "OEM"
+    End If
+  
+      lookupValue = Trim(newRow(idxItem2))
+    If productLineDict.Exists(lookupValue) Then
+        masterRow(M_PRODLINE) = productLineDict(lookupValue)
+    Else
+        rowsNoProductLine = rowsNoProductLine + 1
+    End If
 
+    masterRow(M_NPEUR) = newRow(idxNetPrice)
+    If Not IsNull(netPrice) Then
+        'USD Sales kolona je DOM Ext * FX rate Eur to USD
+        converted = ConvertCurrency("EUR", "USD", netPrice, fxDict)
+        If Not IsNull(converted) Then
+            masterRow(M_NPUSD) = Replace(CStr(converted), ",", ".")
+        End If
+    End If
 
+    masterRow(M_QTYDIFF) = ""
 
+    keyValue = UCase(newRow(idxOrder)) & Chr(1) & UCase(newRow(idxLine))
+    If bjornDict.Exists(keyValue) Then rowsDuplicate = rowsDuplicate + 1
 
+    bjornDict(keyValue) = masterRow
+    rowsKept = rowsKept + 1
+ End If
+Next
 
+WriteLog "Bjorn: kept " & orderLinesDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
+'############################################# Loading - Export Control not in SL file #######################################################################################################################################
+fileText = ""
+lines = ""
+headerFields = ""
+columnCount = ""
 
+in_Xlsx_file = inputFolder & "\Orders - Export Control not yet in SL 1507.xlsx"
+out_Csv_file = outputFolder & "\ExportControlNotInSL.csv"
 
+If XlsxToCsv(in_Xlsx_file, 1, 4, 1, 0, delimiter, out_Csv_file) < 0 Then
+    MsgBox "Could not convert ECnotInSL file -add filename. See log.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
 
+colItem2 = "Customer PO"
+colName = "Name"
+colNetPrice = "Total Price"
+colCurrency = "Currency"
+colDueDate = "Due Date"
 
+fileText = ReadUtf8(out_Csv_file)
+ If Trim(fileText) = "" Then
+    WriteLog "EC not in SL CSV is empty or unreadable: " & out_Csv_file
+    MsgBox "The converted EC not in SL CSV is empty.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+ End If
+fileText = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
+lines = Split(fileText, vbLf)
+headerFields = Split(Trim(lines(0)), delimiter)
+columnCount = UBound(headerFields) + 1
+Set ecnislHeaderIndex = CreateObject("Scripting.Dictionary")
+ecnislHeaderIndex.CompareMode = vbTextCompare
 
+For i = 0 To UBound(headerFields)
+    If Not ecnislHeaderIndex.Exists(Trim(headerFields(i))) Then
+        ecnislHeaderIndex.Add Trim(headerFields(i)), i
+    End If
+Next
 
+requiredCols = Array(colItem2, colDueDate, colName, colNetPrice, colCurrency)
 
+For i = 0 To UBound(requiredCols)
+    If Not ecnislHeaderIndex.Exists(requiredCols(i)) Then
+        WriteLog "EC not in SL: column '" & requiredCols(i) & "' not found. Header: " & lines(0)
+        MsgBox "EC not in SL is missing column '" & requiredCols(i) & "'.", vbCritical, "Sales Analysis"
+        WScript.Quit 1
+    End If
+Next
 
+'idxItem1 = ecnislHeaderIndex(colItem1)
+idxItem2 = ecnislHeaderIndex(colItem2)
+idxName = ecnislHeaderIndex(colName)
+idxDueDate = ecnislHeaderIndex(colDueDate)
+idxNetPrice = ecnislHeaderIndex(colNetPrice)
+idxColCurrency = ecnislHeaderIndex(colCurrency)
 
+Set ecnisDict = CreateObject("Scripting.Dictionary")
+ecnisDict.CompareMode = vbTextCompare
+rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0 : rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
 
+For i = 1 To UBound(lines)
+ If Trim(lines(i)) <> "" Then
+    rowFields = Split(lines(i), delimiter)
+    ReDim newRow(columnCount - 1)
 
+    For j = 0 To columnCount - 1
+        If j <= UBound(rowFields) Then 
+            newRow(j) = Trim(rowFields(j)) 
+        Else 
+            newRow(j) = ""
+        End If 
+    Next
 
+    dateValue = newRow(idxDueDate)
+    dueYear = 0
+     If Len(dateValue) >= 7 Then
+        If IsNumeric(Left(dateValue, 4)) Then dueYear = CLng(Left(dateValue, 4))
+     End If
 
+    netPrice = ToNumber(newRow(idxNetPrice))
 
+    ReDim masterRow(UBound(masterHeader))
+    For j = 0 To UBound(masterRow)
+        masterRow(j) = ""
+    Next
 
+    masterRow(M_ORDER) = ""
+    masterRow(M_LINE) = ""
+    masterRow(M_STATUS) = ""
+    masterRow(M_STATUSSIOP) = "Other Forcast"
+    masterRow(M_ORDERPOS) = ""
+    masterRow(M_ITEM1) = ""
+    masterRow(M_ITEM2) = newRow(idxItem2)
+    masterRow(M_QTY) = ""
+    masterRow(M_UM) =  ""
+    masterRow(M_UNITPRICE) = ""
+    masterRow(M_ORDERDATE) =  ""
+    masterRow(M_DUEDATE) = newRow(idxDueDate)
+    masterRow(M_NAME) = newRow(idxName)
+    masterRow(M_NETPRICE) = newRow(idxNetPrice)
+    masterRow(M_CURRENCY) = newRow(idxColCurrency)
+    dueMonth  = CLng(Mid(dateValue, 6, 2))
+    monthYear = CStr(dueMonth) & CStr(dueYear)
+    masterRow(M_MONTH) = CStr(dueMonth)
+    masterRow(M_YEAR) = CStr(dueYear)
+    masterRow(M_MY) = monthYear
+    If aopDict.Exists(monthYear) Then
+        masterRow(M_FY) = aopDict(monthYear)("FY")
+    Else
+        rowsNoFY = rowsNoFY + 1
+    End If
 
+    lookupValue = Trim(newRow(idxName))
+    If orderTypeDict.Exists(lookupValue) Then
+        masterRow(M_ORDERTYPE) = orderTypeDict(lookupValue)
+    Else
+        masterRow(M_ORDERTYPE) = "OEM"
+    End If
+  
+      lookupValue = Trim(newRow(idxItem2))
+    If productLineDict.Exists(lookupValue) Then
+        masterRow(M_PRODLINE) = productLineDict(lookupValue)
+    Else
+        rowsNoProductLine = rowsNoProductLine + 1
+    End If
 
+    If Not IsNull(netPrice) Then
+      converted = ConvertCurrency(newRow(idxColCurrency), "EUR", netPrice, fxDict)
+        If Not IsNull(converted) Then
+            masterRow(M_NPEUR) = Replace(CStr(converted), ",", ".")
+        End If
+        
+      converted = ConvertCurrency(newRow(idxColCurrency), "USD", netPrice, fxDict)
+        If Not IsNull(converted) Then
+            masterRow(M_NPUSD) = Replace(CStr(converted), ",", ".")
+        End If
+    End If
 
+    masterRow(M_QTYDIFF) = ""
 
+    keyValue = UCase(newRow(idxItem2)) & Chr(1) & UCase(newRow(idxDueDate)) & UCase(newRow(idxName))
+    If ecnisDict.Exists(keyValue) Then rowsDuplicate = rowsDuplicate + 1
 
+    ecnisDict(keyValue) = masterRow
+    rowsKept = rowsKept + 1
+ End If
+Next
 
+WriteLog "EC not in SL: kept " & ecnisDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
+'############################# OtherForcast&NRC -> master rows #############################
 
+Dim forecastSource, forecastDict, forecastKeys, sourceRow, forecastKey
+Dim fcNetPrice, fcCurrency, fcMonth, fcYear
 
+Set forecastSource = inputData("OtherForcast&NRC")
+Set forecastDict = CreateObject("Scripting.Dictionary")
+forecastDict.CompareMode = vbTextCompare
+rowsKept = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
+forecastKeys = forecastSource.Keys
 
+For n = 0 To UBound(forecastKeys)
+    Set sourceRow = forecastSource(forecastKeys(n))
 
+    ReDim masterRow(UBound(masterHeader))
+    For j = 0 To UBound(masterRow)
+        masterRow(j) = ""
+    Next
 
+    masterRow(M_STATUSSIOP) = "Other Forcast"
+    masterRow(M_ITEM1) = sourceRow("Item 1")
+    masterRow(M_ITEM2) = sourceRow("Item 2")
+    masterRow(M_NAME) = sourceRow("Name (customer)")
+    masterRow(M_ORDERTYPE) = sourceRow("Order Type")
+    masterRow(M_NETPRICE) = sourceRow("Net Price")
+    masterRow(M_CURRENCY) = sourceRow("Currency")
+    fcMonth = Trim(sourceRow("Month"))
+    fcYear = Trim(sourceRow("Year"))
+    masterRow(M_MONTH) = fcMonth
+    masterRow(M_YEAR) = fcYear
+    monthYear = fcMonth & fcYear
+    masterRow(M_MY) = monthYear
+     If aopDict.Exists(monthYear) Then
+        masterRow(M_FY) = aopDict(monthYear)("FY")
+     Else
+        rowsNoFY = rowsNoFY + 1
+     End If
+    lookupValue = Trim(sourceRow("Item 2"))
+    If productLineDict.Exists(lookupValue) Then
+        masterRow(M_PRODLINE) = productLineDict(lookupValue)
+    Else
+        rowsNoProductLine = rowsNoProductLine + 1
+    End If
 
+    fcNetPrice = ToNumber(sourceRow("Net Price"))
+    fcCurrency = Trim(sourceRow("Currency"))
+    If Not IsNull(fcNetPrice) Then
+        converted = ConvertCurrency(fcCurrency, "EUR", fcNetPrice, fxDict)
+        If IsNull(converted) Then
+            rowsNoRate = rowsNoRate + 1
+        Else
+            masterRow(M_NPEUR) = Replace(CStr(converted), ",", ".")
+        End If
 
+        converted = ConvertCurrency(fcCurrency, "USD", fcNetPrice, fxDict)
+        If Not IsNull(converted) Then
+            masterRow(M_NPUSD) = Replace(CStr(converted), ",", ".")
+        End If
+    End If
 
+    forecastKey = "FC" & Chr(1) & UCase(Trim(sourceRow("Item 1"))) & Chr(1) & monthYear & Chr(1) & UCase(Trim(sourceRow("Name (customer)")))
+    forecastDict(forecastKey) = masterRow
+    rowsKept = rowsKept + 1
+Next
 
+WriteLog "OtherForcast&NRC: kept " & forecastDict.Count & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
+'############################# Merge sources into master #############################
 
+Dim sourceDicts, sourceNames, sourceDict, sourceKeys, sourceRowIn, existingRow
+Dim outputBuffer, outputKeys, changedCols, valueOld, valueNew
+Dim rowsInserted, rowsUpdated, rowsUnchanged, changeLogged
+Dim d, k, n, c
+Dim preserveMasterOnBlank
 
+' True - a blank incoming value leaves the master value alone.
+' False - a blank incoming value overwrites the master value.
+preserveMasterOnBlank = True
+sourceDicts = Array(orderLinesDict, bjornDict, ecnisDict, forecastDict)
+sourceNames = Array("CustomerOrderLines", "Bjorn", "EC not in SL", "OtherForcast&NRC")
 
+rowsInserted = 0 : rowsUpdated = 0 : rowsUnchanged = 0 : changeLogged = 0
 
+For d = 0 To UBound(sourceDicts)
+    Set sourceDict = sourceDicts(d)
+    sourceKeys = sourceDict.Keys
+
+    For n = 0 To UBound(sourceKeys)
+        k = sourceKeys(n)
+        sourceRowIn = sourceDict(k)
+
+        If Not masterDict.Exists(k) Then
+            masterDict(k) = sourceRowIn
+            rowsInserted = rowsInserted + 1
+
+        Else
+            existingRow = masterDict(k)
+            changedCols = ""
+
+            If Trim(sourceRowIn(M_STATUSSIOP)) <> "" Then
+                If StrComp(Trim(existingRow(M_STATUSSIOP)), _
+                           Trim(sourceRowIn(M_STATUSSIOP)), vbTextCompare) <> 0 Then
+                    rowsSourceConflict = rowsSourceConflict + 1
+                    WriteLog "CONFLICT " & Replace(k, Chr(1), " + ") & ": already '" & _
+                             existingRow(M_STATUSSIOP) & "', " & sourceNames(d) & _
+                             " reports '" & sourceRowIn(M_STATUSSIOP) & "'"
+                End If
+            End If
+
+            For c = 0 To UBound(masterHeader)
+                valueOld = existingRow(c)
+                valueNew = sourceRowIn(c)
+
+                If preserveMasterOnBlank And Trim(valueNew) = "" Then
+                ElseIf StrComp(Trim(valueOld), Trim(valueNew), vbTextCompare) <> 0 Then
+                    changedCols = changedCols & masterHeader(c) & " '" & valueOld & "' -> '" & valueNew & "'; "
+                    existingRow(c) = valueNew
+                End If
+            Next
+
+            If changedCols = "" Then
+                rowsUnchanged = rowsUnchanged + 1
+            Else
+                masterDict(k) = existingRow
+                rowsUpdated = rowsUpdated + 1
+
+                If changeLogged < 200 Then
+                    WriteLog "Update " & Replace(k, Chr(1), " + ") & " from " & sourceNames(d) & ": " & changedCols
+                    changeLogged = changeLogged + 1
+                End If
+            End If
+        End If
+    Next
+
+    WriteLog "Merged " & sourceNames(d) & ": " & sourceDict.Count & " rows processed"
+Next
+
+WriteLog "Merge result: " & rowsInserted & " inserted, " & rowsUpdated & " updated, " &   rowsUnchanged & " unchanged | master now " & masterDict.Count & " rows"
+
+'############################# Status SIOP overrides #############################
+' Rule: Name | Item | Order contains | Due Date beyond N months | new Status SIOP
+Dim statusRules
+statusRules = Array(Array("Airbus Operations GMBH", "", "P", 0, "SL Forecast"), _
+                    Array("GOODRICH ACTUATION", "", "A", 0, "SL Forecast"), _
+                    Array("ROLLS ROYCE", "", "",  3, "SL Forecast"), _
+                    Array("", "L32A320N-70A", "A", 0, "SL Forecast"), _
+                    Array("DIEHL AVIATION GILCHING GMBH", "", "P", 0, "SL Forecast"))
+Const RULE_NAME     = 0
+Const RULE_ITEM     = 1
+Const RULE_ORDER    = 2
+Const RULE_MONTHS   = 3
+Const RULE_STATUS   = 4
+
+Dim ruleKeys, ruleRow, oneRule, ruleMatches, cutoffDate, rowsOverridden, r
+cutoffDate = ""
+rowsOverridden = 0
+ruleKeys = masterDict.Keys
+
+For n = 0 To UBound(ruleKeys)
+    ruleRow = masterDict(ruleKeys(n))
+
+    For r = 0 To UBound(statusRules)
+        oneRule = statusRules(r)
+        ruleMatches = True
+
+        If oneRule(RULE_NAME) <> "" Then
+            If StrComp(Trim(ruleRow(M_NAME)), oneRule(RULE_NAME), vbTextCompare) <> 0 Then
+                ruleMatches = False
+            End If
+        End If
+
+        If ruleMatches And oneRule(RULE_ITEM) <> "" Then
+            If StrComp(Trim(ruleRow(M_ITEM1)), oneRule(RULE_ITEM), vbTextCompare) <> 0 Then
+                ruleMatches = False
+            End If
+        End If
+
+        If ruleMatches And oneRule(RULE_ORDER) <> "" Then
+            If InStr(1, ruleRow(M_ORDER), oneRule(RULE_ORDER), vbTextCompare) = 0 Then
+                ruleMatches = False
+            End If
+        End If
+
+        If ruleMatches And oneRule(RULE_MONTHS) > 0 Then
+            cutoffDate = IsoDate(DateAdd("m", oneRule(RULE_MONTHS), Date))
+            If Len(ruleRow(M_DUEDATE)) < 10 Then
+                ruleMatches = False
+            ElseIf ruleRow(M_DUEDATE) <= cutoffDate Then
+                ruleMatches = False
+            End If
+        End If
+
+        If ruleMatches Then
+            If StrComp(ruleRow(M_STATUSSIOP), oneRule(RULE_STATUS), vbTextCompare) <> 0 Then
+                WriteLog "Override " & Replace(ruleKeys(n), Chr(1), " + ") & ": '" & ruleRow(M_STATUSSIOP) & "' -> '" & oneRule(RULE_STATUS) & "' (rule " & (r + 1) & ")"
+                ruleRow(M_STATUSSIOP) = oneRule(RULE_STATUS)
+                masterDict(ruleKeys(n)) = ruleRow
+                rowsOverridden = rowsOverridden + 1
+            End If
+            Exit For
+        End If
+    Next
+Next
+
+WriteLog "Status SIOP overrides applied: " & rowsOverridden & " rows"
+
+'############################# Write MasterData.csv #############################
+
+outputKeys = masterDict.Keys
+ReDim outputBuffer(masterDict.Count)
+outputBuffer(0) = Join(masterHeader, delimiter)
+
+For n = 0 To UBound(outputKeys)
+    outputBuffer(n + 1) = Join(masterDict(outputKeys(n)), delimiter)
+Next
+
+If Not WriteUtf8(masterCsvFile, Join(outputBuffer, vbCrLf) & vbCrLf) Then
+    MsgBox "Could not write MasterData.csv. See log.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+
+WriteLog "MasterData.csv written: " & masterDict.Count & " rows, " & (UBound(masterHeader) + 1) & " columns"
+
+MsgBox "Done." & vbCrLf & vbCrLf & "Inserted: " & rowsInserted & vbCrLf & "Updated:  " & rowsUpdated & vbCrLf & "Unchanged: " & rowsUnchanged & vbCrLf & "Total rows: " & masterDict.Count, vbInformation, "Sales Analysis"
 
 
 
@@ -461,7 +1016,6 @@ Function XlsxToCsv(srcBook, sheetName, headerRow, firstCol, lastCol, sDelim, dst
         Exit Function
     End If
 
-    ' One array read. Cell-by-cell COM over 150k cells takes minutes.
     arrHdr  = dvsWs.Range(dvsWs.Cells(headerRow, firstCol), dvsWs.Cells(headerRow, lastCol)).Value
     arrData = dvsWs.Range(dvsWs.Cells(headerRow + 1, firstCol), dvsWs.Cells(lastRow, lastCol)).Value
 
@@ -477,8 +1031,7 @@ Function XlsxToCsv(srcBook, sheetName, headerRow, firstCol, lastCol, sDelim, dst
     If Not IsArray(arrHdr)  Then arrHdr  = OneCellArray(arrHdr)
     If Not IsArray(arrData) Then arrData = OneCellArray(arrData)
 
-    sOut = BuildHeaderLine(arrHdr, nCols, sDelim) & vbCrLf & _
-           BuildDataLines(arrData, nCols, sDelim, nRows)
+    sOut = BuildHeaderLine(arrHdr, nCols, sDelim) & vbCrLf &     BuildDataLines(arrData, nCols, sDelim, nRows)
 
     If Not WriteUtf8(dstCsv, sOut) Then Exit Function
 
@@ -486,6 +1039,9 @@ Function XlsxToCsv(srcBook, sheetName, headerRow, firstCol, lastCol, sDelim, dst
 
 End Function
 
+Function IsoDate(inputDate)
+    IsoDate = Year(inputDate) & "-" & P2(Month(inputDate)) & "-" & P2(Day(inputDate))
+End Function
 
 Function BuildHeaderLine(arrHdr, nCols, sDelim)
 
@@ -718,8 +1274,7 @@ Function TimeStamp()
 
     Dim d
     d = Now
-    TimeStamp = Year(d) & P2(Month(d)) & P2(Day(d)) & "_" & _
-                P2(Hour(d)) & P2(Minute(d)) & P2(Second(d))
+    TimeStamp = Year(d) & P2(Month(d)) & P2(Day(d)) & "_" & P2(Hour(d)) & P2(Minute(d)) & P2(Second(d))
 
 End Function
 
@@ -732,10 +1287,7 @@ End Function
 '------------------------------------------------------------------------------
 ' Converts an amount between currencies using the FX rates already loaded
 ' from Input.xlsx. No Excel, no file access.
-'
 '   fxDict - pass inputData("FX")
-'
-' Returns a Double, or Null if the amount or the rate is unusable.
 '------------------------------------------------------------------------------
 Function ConvertCurrency(inputCurrency, targetCurrency, amount, fxDict)
 
@@ -752,15 +1304,15 @@ Function ConvertCurrency(inputCurrency, targetCurrency, amount, fxDict)
         Exit Function
     End If
 
-    lookupKey = UCase(Trim(inputCurrency)) & " TO " & UCase(Trim(targetCurrency))
+    lookupKey = UCase(Trim(inputCurrency)) & UCase(Trim(targetCurrency))
      If Not fxDict.Exists(lookupKey) Then
-        WriteLog "ConvertCurrency: no rate for '" & lookupKey & "'"
+        WriteLog "ConvertCurrency: no rate for " & Trim(inputCurrency) & " -> " & Trim(targetCurrency)
         Exit Function
      End If
 
     rate = ToNumber(fxDict(lookupKey))
      If IsNull(rate) Then
-        WriteLog "ConvertCurrency: unusable rate for '" & lookupKey & "'"
+        WriteLog "ConvertCurrency: unusable rate for " & lookupKey
         Exit Function
      End If
 
@@ -768,17 +1320,9 @@ Function ConvertCurrency(inputCurrency, targetCurrency, amount, fxDict)
 
 End Function
 
-'------------------------------------------------------------------------------
-' Converts a text field to a number.
-' CDbl follows the machine's regional decimal separator: on a Croatian Windows
-' CDbl("1005.97") throws or returns 100597. Values always use a period, so
-' swap it for whatever this machine expects before converting.
-' Returns Null for unusable values ("", "#ERR", text).
-'------------------------------------------------------------------------------
 Function ToNumber(textValue)
 
     Dim cleanValue, localeDecimal
-
     ToNumber = Null
 
     cleanValue = Trim(textValue)
@@ -786,22 +1330,12 @@ Function ToNumber(textValue)
 
     localeDecimal = Mid(CStr(1.5), 2, 1)          ' this machine's separator
     If localeDecimal <> "." Then cleanValue = Replace(cleanValue, ".", localeDecimal)
-
     If Not IsNumeric(cleanValue) Then Exit Function
 
     ToNumber = CDbl(cleanValue)
 
 End Function
 
-'------------------------------------------------------------------------------
-' Reads one sheet into a dictionary.
-'
-'   valueColumn = ""   ->  key -> Dictionary(columnName -> value)
-'   valueColumn = name ->  key -> single value  (flat lookup)
-'   keyColumns  = ""   ->  key is the row's position, "1", "2", "3"...
-'
-' Returns Nothing on a structural problem so the caller can abort.
-'------------------------------------------------------------------------------
 Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, valueColumn, sheetLabel)
  
     Dim result, rowDict, arrHdr, arrData, headerNames, usedNames, keyParts
@@ -811,8 +1345,7 @@ Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, value
  
     arrHdr = dvsWs.Range(dvsWs.Cells(headerRow, 1), dvsWs.Cells(headerRow, lastColumn)).Value
      If Err.Number <> 0 Then
-        WriteLog "Sheet '" & sheetLabel & "': could not read header row " & headerRow & _
-                 " - " & Err.Description
+        WriteLog "Sheet '" & sheetLabel & "': could not read header row " & headerRow & " - " & Err.Description
         Err.Clear
         Exit Function
      End If
@@ -842,8 +1375,7 @@ Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, value
         keyParts = Split(keyColumns, "|")
         For i = 0 To UBound(keyParts)
             If Not usedNames.Exists(keyParts(i)) Then
-                WriteLog "Sheet '" & sheetLabel & "': key column '" & keyParts(i) & _
-                         "' not found. Columns: " & Join(headerNames, ", ")
+                WriteLog "Sheet '" & sheetLabel & "': key column '" & keyParts(i) & "' not found. Columns: " & Join(headerNames, ", ")
                 Exit Function
             End If
         Next
@@ -855,8 +1387,7 @@ Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, value
             If StrComp(headerNames(c), valueColumn, vbTextCompare) = 0 Then valueIndex = c
         Next
         If valueIndex = -1 Then
-            WriteLog "Sheet '" & sheetLabel & "': value column '" & valueColumn & _
-                     "' not found. Columns: " & Join(headerNames, ", ")
+            WriteLog "Sheet '" & sheetLabel & "': value column '" & valueColumn & "' not found. Columns: " & Join(headerNames, ", ")
             Exit Function
         End If
     End If
