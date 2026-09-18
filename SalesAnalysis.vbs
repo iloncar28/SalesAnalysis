@@ -95,7 +95,11 @@ Set fso = CreateObject("Scripting.FileSystemObject")
     On Error GoTo 0
 '############################################# Load all Input.xlsx sheets into Dictionary #############################################
 
-sheet_map = Array(Array("FX", 1, 2, 3, "From Currency|To Currency", "Value"),            Array("OrderType", 1, 2, 2, "Spares customers", "Value"),            Array("AOP", 1, 2, 5, "Concate", ""),            Array("OtherForcast&NRC", 1, 2, 10, "", ""),            Array("ProductLine", 1, 2, 3, "Desc", "Clasification"))
+sheet_map = Array(Array("FX", 1, 2, 3, "From Currency|To Currency", "Value"),_
+                  Array("OrderType", 1, 2, 2, "Spares customers", "Value"),_
+                  Array("AOP", 1, 2, 5, "Concate", ""),_
+                  Array("OtherForcast&NRC", 1, 2, 10, "", ""),_
+                  Array("ProductLine", 1, 2, 3, "Desc", "Clasification"))
 
 inputBook = inputFolder & "\Input.xlsx"
 
@@ -250,7 +254,6 @@ If XlsxToCsv(in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file) < 0 Then
     WScript.Quit 1
 End If
 
-
 Set fxDict = inputData("FX")
 Set orderTypeDict = inputData("OrderType")
 Set aopDict = inputData("AOP")
@@ -342,11 +345,16 @@ For i = 1 To UBound(lines)
         For j = 0 To UBound(masterRow)
             masterRow(j) = ""
         Next
+        If statusValue = "ORDERED" then
+            outStatus = "Orderbook"
+        Else
+            outStatus = statusValue
+        End If
 
         masterRow(M_ORDER) = newRow(idxOrder)
         masterRow(M_LINE) = newRow(idxLine)
         masterRow(M_STATUS) = newRow(idxStatus)
-        masterRow(M_STATUSSIOP) = "Orderbook"
+        masterRow(M_STATUSSIOP) = outStatus
         masterRow(M_ORDERPOS) = newRow(idxOrder) & newRow(idxLine)
         masterRow(M_ITEM1) = newRow(idxItem1)
         masterRow(M_ITEM2) = newRow(idxItem2)
@@ -522,7 +530,7 @@ For i = 1 To UBound(lines)
     masterRow(M_ORDER) = newRow(idxOrder)
     masterRow(M_LINE) = newRow(idxLine)
     masterRow(M_STATUS) = ""
-    masterRow(M_STATUSSIOP) = "Target"
+    masterRow(M_STATUSSIOP) = "Invoiced"
     masterRow(M_ORDERPOS) = ""
     masterRow(M_ITEM1) = newRow(idxItem1)
     masterRow(M_ITEM2) = newRow(idxItem2)
@@ -1084,7 +1092,7 @@ Function BuildDataLines(arrData, nCols, sDelim, ByRef nRows)
             If bEmpty And parts(c - 1) <> "" Then bEmpty = False
         Next
 
-        If Not bEmpty Then                    ' drop UsedRange's trailing blanks
+        If Not bEmpty Then
             If nBuf > UBound(buf) Then ReDim Preserve buf(nBuf * 2)
             buf(nBuf) = Join(parts, sDelim)
             nBuf = nBuf + 1
@@ -1103,7 +1111,7 @@ End Function
 
 Function FormatCell(v, sDelim)
 
-    If VarType(v) = vbError Then          ' MUST be first
+    If VarType(v) = vbError Then
         FormatCell = "#ERR"
     ElseIf IsNull(v) Or IsEmpty(v) Then
         FormatCell = ""
@@ -1119,7 +1127,6 @@ Function FormatCell(v, sDelim)
 
 End Function
 
-
 Function Clean(s, sDelim)
 
     s = Replace(s, vbCr, " ")
@@ -1130,19 +1137,19 @@ Function Clean(s, sDelim)
 
 End Function
 
-
 Function OneCellArray(v)
+
     Dim a
     ReDim a(1, 1)
     a(1, 1) = v
     OneCellArray = a
+
 End Function
 
 
 Function ReadUtf8(filePath)
 
     Dim stream
-
     ReadUtf8 = ""
 
     If Not fso.FileExists(filePath) Then
@@ -1153,11 +1160,11 @@ Function ReadUtf8(filePath)
     On Error Resume Next
 
     Set stream = CreateObject("ADODB.Stream")
-    stream.Type = 2                    ' adTypeText - treat contents as text, not bytes
+    stream.Type = 2
     stream.Charset = "utf-8"
-    stream.Open                        ' must Open before any read
-    stream.LoadFromFile filePath       ' pull the file into the stream buffer
-    ReadUtf8 = stream.ReadText         ' whole buffer as one string
+    stream.Open
+    stream.LoadFromFile filePath
+    ReadUtf8 = stream.ReadText
     stream.Close
 
     If Err.Number <> 0 Then
@@ -1182,8 +1189,8 @@ Function WriteUtf8(filePath, fileText)
     stream.Type = 2
     stream.Charset = "utf-8"
     stream.Open
-    stream.WriteText fileText          ' whole string into the buffer
-    stream.SaveToFile filePath, 2      ' 2 = adSaveCreateOverWrite
+    stream.WriteText fileText
+    stream.SaveToFile filePath, 2
     stream.Close
 
      If Err.Number <> 0 Then
@@ -1286,7 +1293,6 @@ End Function
 
 '------------------------------------------------------------------------------
 ' Converts an amount between currencies using the FX rates already loaded
-' from Input.xlsx. No Excel, no file access.
 '   fxDict - pass inputData("FX")
 '------------------------------------------------------------------------------
 Function ConvertCurrency(inputCurrency, targetCurrency, amount, fxDict)
