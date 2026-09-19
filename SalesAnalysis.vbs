@@ -1,6 +1,7 @@
 KillProcess("excel.exe")
 'napravit scriptu za izmjenu naziva kolona u skinutim fajlicama
 'dodat renaming klijenata u unificirani naziv isto u pre-skriptu
+'clean archive items how many?
 
 Dim colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM
 Dim colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency
@@ -12,14 +13,17 @@ Dim yearFrom, yearTo, dueYear, dueMonth, dateValue, statusValue, monthYear
 Dim qtyOrdered, invoiced, netPrice, converted, lookupValue
 Dim fxDict, orderTypeDict, aopDict, productLineDict
 Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsDuplicate
-Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader
-Dim masterSourceCols, mstrIdx, mstrLines, mstrFields, mstrHeaderIdx
-Dim masterDict, mstrRow, mstrKey, mstrCsv
-Dim mstrDate, mstrYear, mstrMonth, mstrMY, mstrQty, mstrInvoiced, mstrNetPrice, mstrCurrency
-Dim mstrBlankKey, mstrDupe, sheet_map, inputBook, dvsXl, dvsWb, dvsWs
+Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader, masterDict
+'Dim masterSourceCols, mstrIdx, mstrLines, mstrFields, mstrHeaderIdx
+'Dim mstrRow, mstrKey, mstrCsv
+'Dim mstrDate, mstrYear, mstrMonth, mstrMY, mstrQty, mstrInvoiced, mstrNetPrice, mstrCurrency
+'Dim mstrBlankKey, mstrDupe
+Dim sheet_map, inputBook, dvsXl, dvsWb, dvsWs
 Dim sheetNames, inputData, sheetData, missingSheets, sheetName, i
 Dim shell, rootFolder, masterCsvFile, in_Xlsx_file, out_Csv_file
-Dim fso, inputFolder, archiveFolder, outputFolder, delimiter
+Dim fso, inputFolder, archiveFolder, outputFolder, delimiter, rowsSourceConflict
+Dim inputSubFolders, oneSub, inFolderCustomerOrderLinesPath, inFolderBjornPath, inFolderEcNotInSLPath
+
 Const map_SHEET = 0
 Const map_HDRROW = 1
 Const map_FIRSTROW = 2
@@ -58,41 +62,56 @@ inputFolder = rootFolder & "Input"
 archiveFolder = rootFolder & "Archive"
 outputFolder = rootFolder & "Output"
 masterCsvFile = rootFolder & "MasterData.csv"
-masterSrcFileName = "Base SIOP July 2026"
-masterSrcFileExt = ".xlsx"
-masterSrcFilePath = inputFolder & "\" & masterSrcFileName & masterSrcFileExt
-destArchFileLoc = archiveFolder & "\" & masterSrcFileName & "_" & TimeStamp() & ".xlsx"
+masterCsvFileName = "MasterData"
+masterCsvFileExt = ".csv"
+'masterSrcFilePath = inputFolder & "\" & masterCsvFileName & masterCsvFileExt ' - Change for master file in future if needed CSV-moved from Src
+destArchFileLoc = archiveFolder & "\" & masterCsvFileName & "_" & TimeStamp() & masterCsvFileExt
 delimiter = "|"
+inFolderCustomerOrderLinesPath = inputFolder & "\CustomerOrderLines"
+inFolderBjornPath = inputFolder & "\Bjorn"
+inFolderEcNotInSLPath = inputFolder & "\ExportControlNotInSL"
+inputSubFolders = Array("Bjorn", "CustomerOrderLines", "ExportControlNotInSL")
 
 WriteLog "Process started."
 Set fso = CreateObject("Scripting.FileSystemObject")
+If Not fso.FolderExists(inputFolder) Then
+    fso.CreateFolder inputFolder
+    WriteLog "Created folder " & inputFolder
+    WScript.Echo "Check if input files are placed in 'Input' folder"
+    WScript.Quit
+End If
 
-    If Not fso.FolderExists(inputFolder) then 
-        fso.CreateFolder(inputFolder)
-        WScript.Echo "Check if input files are placed in 'Input' folder"
-        WScript.Quit
-    End if
+If Not fso.FolderExists(archiveFolder) Then
+    fso.CreateFolder archiveFolder
+    WriteLog "Created folder " & archiveFolder
+End If
 
-    If Not fso.FolderExists(archiveFolder) then 
-        fso.CreateFolder(archiveFolder)
-        WriteLog "Created folder " & archiveFolder
-    End if
+If Not fso.FolderExists(outputFolder) Then
+    fso.CreateFolder outputFolder
+    WriteLog "Created folder " & outputFolder
+End If
 
-    If Not fso.FolderExists(outputFolder) then 
-        fso.CreateFolder(outputFolder)
-        WriteLog "Created folder " & outputFolder
-    End if
+For Each oneSub In inputSubFolders
+    If Not fso.FolderExists(inputFolder & "\" & oneSub) Then
+        fso.CreateFolder inputFolder & "\" & oneSub
+        WriteLog "Created folder " & inputFolder & "\" & oneSub
+    End If
+Next
 
+If fso.FileExists(masterCsvFile) Then
     On Error Resume Next
-    fso.CopyFile masterSrcFilePath, destArchFileLoc, False
-     If Err.Number <> 0 Then
+    fso.CopyFile masterCsvFile, destArchFileLoc, False
+    If Err.Number <> 0 Then
         WriteLog "Backup failed: " & Err.Description
         Err.Clear
         On Error GoTo 0
         MsgBox "Could not back up the master file. Process stopped.", vbCritical, "Sales Analysis"
         WScript.Quit 1
-     End If
+    End If
     On Error GoTo 0
+    WriteLog "Backup: " & destArchFileLoc
+End If
+
 '############################################# Load all Input.xlsx sheets into Dictionary #############################################
 
 sheet_map = Array(Array("FX", 1, 2, 3, "From Currency|To Currency", "Value"),_
@@ -166,87 +185,91 @@ On Error GoTo 0
 CleanUpExcel dvsXl, dvsWb
 
 '############################# Load master (Orderbook) -> dictionary #############################
-
-masterSourceCols = Array("Order","Line","Status (SL)","Status SIOP","Order + Pos","Item","Item_2","Qty Ordered","U/M", _
-    "Unit Price","Order Date","Due Date","Month","Year","M+Y","FY","Name","Order type","Net Price", _
-    "Currency","Net Price EUR","Net Price USD","Product Line","")
-
-mstrCsv = outputFolder & "\MasterCurrent.csv"
-If XlsxToCsv(masterSrcFilePath, "SIOP", 4, 1, 0, delimiter, mstrCsv) < 0 Then
-    MsgBox "Could not read the master file. See log.", vbCritical, "Sales Analysis"
-    WScript.Quit 1
-End If
-
-fileText = ReadUtf8(mstrCsv)
-If Trim(fileText) = "" Then
-    WriteLog "Master CSV is empty: " & mstrCsv
-    MsgBox "The master file produced no rows.", vbCritical, "Sales Analysis"
-    WScript.Quit 1
-End If
-
-fileText  = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
-mstrLines = Split(fileText, vbLf)
-mstrFields = Split(Trim(mstrLines(0)), delimiter)
-
-Set mstrHeaderIdx = CreateObject("Scripting.Dictionary")
-mstrHeaderIdx.CompareMode = vbTextCompare
-For i = 0 To UBound(mstrFields)
-    If Not mstrHeaderIdx.Exists(Trim(mstrFields(i))) Then
-        mstrHeaderIdx.Add Trim(mstrFields(i)), i
-    End If
-Next
-
-ReDim mstrIdx(UBound(masterHeader))
-
-For j = 0 To UBound(masterHeader)
-    If masterSourceCols(j) = "" Then
-        mstrIdx(j) = -1
-    ElseIf Not mstrHeaderIdx.Exists(masterSourceCols(j)) Then
-        WriteLog "Master: column '" & masterSourceCols(j) & "' not found in Orderbook."
-        MsgBox "Master is missing column '" & masterSourceCols(j) & "'.", vbCritical, "Sales Analysis"
-        WScript.Quit 1
-    Else
-        mstrIdx(j) = mstrHeaderIdx(masterSourceCols(j))
-    End If
-Next
-
-
 Set masterDict = CreateObject("Scripting.Dictionary")
 masterDict.CompareMode = vbTextCompare
-mstrBlankKey = 0 : mstrDupe = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
 
-For i = 1 To UBound(mstrLines)
- If Trim(mstrLines(i)) <> "" Then
+'masterSourceCols = Array("Order","Line","Status (SL)","Status SIOP","Order + Pos","Item","Item_2","Qty Ordered","U/M", _
+'    "Unit Price","Order Date","Due Date","Month","Year","M+Y","FY","Name","Order type","Net Price", _
+'    "Currency","Net Price EUR","Net Price USD","Product Line","")
 
-    rowFields = Split(mstrLines(i), delimiter)
-    ReDim masterRow(UBound(masterHeader))
+'mstrCsv = outputFolder & "\MasterCurrent.csv"
+'If XlsxToCsv(masterSrcFilePath, "SIOP", 4, 1, 0, delimiter, mstrCsv) < 0 Then
+'    MsgBox "Could not read the master file. See log.", vbCritical, "Sales Analysis"
+'    WScript.Quit 1
+'End If
 
-    For j = 0 To UBound(masterHeader)
-        If mstrIdx(j) = -1 Then
-            masterRow(j) = ""
-        ElseIf mstrIdx(j) <= UBound(rowFields) Then
-            masterRow(j) = Trim(rowFields(mstrIdx(j)))
-        Else
-            masterRow(j) = ""
-        End If
-    Next
+'fileText = ReadUtf8(mstrCsv)
+'If Trim(fileText) = "" Then
+'    WriteLog "Master CSV is empty: " & mstrCsv
+'    MsgBox "The master file produced no rows.", vbCritical, "Sales Analysis"
+'    WScript.Quit 1
+'End If
 
-    If masterRow(M_ORDER) = "" And masterRow(M_LINE) = "" Then
-        mstrBlankKey = mstrBlankKey + 1
-    Else
+'fileText  = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
+'mstrLines = Split(fileText, vbLf)
+'mstrFields = Split(Trim(mstrLines(0)), delimiter)
 
-    mstrKey = UCase(masterRow(M_ORDER)) & Chr(1) & UCase(masterRow(M_LINE))
-    If masterDict.Exists(mstrKey) Then mstrDupe = mstrDupe + 1
-       masterDict(mstrKey) = masterRow
-    End If
- End If
-Next
+'Set mstrHeaderIdx = CreateObject("Scripting.Dictionary")
+'mstrHeaderIdx.CompareMode = vbTextCompare
+'For i = 0 To UBound(mstrFields)
+'    If Not mstrHeaderIdx.Exists(Trim(mstrFields(i))) Then
+'        mstrHeaderIdx.Add Trim(mstrFields(i)), i
+'    End If
+'Next
+'ReDim mstrIdx(UBound(masterHeader))
 
-WriteLog "Master loaded: " & masterDict.Count & " keys | blank keys " & mstrBlankKey &          " | duplicate keys " & mstrDupe & " | no FY " & rowsNoFY &          " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
+'For j = 0 To UBound(masterHeader)
+'    If masterSourceCols(j) = "" Then
+'        mstrIdx(j) = -1
+'    ElseIf Not mstrHeaderIdx.Exists(masterSourceCols(j)) Then
+'        WriteLog "Master: column '" & masterSourceCols(j) & "' not found in Orderbook."
+'        MsgBox "Master is missing column '" & masterSourceCols(j) & "'.", vbCritical, "Sales Analysis"
+'        WScript.Quit 1
+'    Else
+'        mstrIdx(j) = mstrHeaderIdx(masterSourceCols(j))
+'    End If
+'Next
+
+'Set masterDict = CreateObject("Scripting.Dictionary")
+'masterDict.CompareMode = vbTextCompare
+'mstrBlankKey = 0 : mstrDupe = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
+
+'For i = 1 To UBound(mstrLines)
+' If Trim(mstrLines(i)) <> "" Then
+
+'    rowFields = Split(mstrLines(i), delimiter)
+'    ReDim masterRow(UBound(masterHeader))
+
+'    For j = 0 To UBound(masterHeader)
+'        If mstrIdx(j) = -1 Then
+'            masterRow(j) = ""
+'        ElseIf mstrIdx(j) <= UBound(rowFields) Then
+'            masterRow(j) = Trim(rowFields(mstrIdx(j)))
+'        Else
+'            masterRow(j) = ""
+'        End If
+'    Next
+
+'    If masterRow(M_ORDER) = "" And masterRow(M_LINE) = "" Then
+'        mstrBlankKey = mstrBlankKey + 1
+'    Else
+
+'    mstrKey = UCase(masterRow(M_ORDER)) & Chr(1) & UCase(masterRow(M_LINE))
+'    If masterDict.Exists(mstrKey) Then mstrDupe = mstrDupe + 1
+'       masterDict(mstrKey) = masterRow
+'    End If
+' End If
+'Next
+
+'WriteLog "Master loaded: " & masterDict.Count & " keys | blank keys " & mstrBlankKey &          " | duplicate keys " & mstrDupe & " | no FY " & rowsNoFY &          " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 '############################################# Convert XLSX to CSV - Customer Order Lines Export file #############################################
-in_Xlsx_file = inputFolder & "\CustomerOrderLinesExport33.xlsx"
-out_Csv_file = outputFolder & "\CustomerOrderLinesExport.csv"
+in_Xlsx_file = FindSingleXlsx(inFolderCustomerOrderLinesPath, "CustomerOrderLines")
+If in_Xlsx_file = "" Then
+    MsgBox "Put CustomerOrderLines input file in Input\CustomerOrderLines.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
+out_Csv_file = outputFolder & "\CustomerOrderLines.csv"
 
 'XlsxToCsv in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file
 If XlsxToCsv(in_Xlsx_file, 1, 1, 1, 0, delimiter, out_Csv_file) < 0 Then
@@ -421,7 +444,6 @@ Next
 
 WriteLog "CustOrderLines: kept " & orderLinesDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
-
 '############################################# Loading - Bjorn file #######################################################################################################################################
 Dim bjornHeaderIndex, colCalendarYear, idxCalendarYear
 
@@ -430,9 +452,12 @@ lines = ""
 headerFields = ""
 columnCount = ""
 
-in_Xlsx_file = inputFolder & "\4.1 MS-Ger_SalesAnalysis_TCONT_GR_APP-June 2026 YTD.xlsm"
+in_Xlsx_file = FindSingleXlsx(inFolderBjornPath, "Bjorn")
+If in_Xlsx_file = "" Then
+    MsgBox "Put exactly one xlsx file in Input\Bjorn File.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
 out_Csv_file = outputFolder & "\Bjorn.csv"
-
 
 If XlsxToCsv(in_Xlsx_file, "Sales Analysis", 1, 1, 0, delimiter, out_Csv_file) < 0 Then
     MsgBox "Could not convert Bjorn file -add filename. See log.", vbCritical, "Sales Analysis"
@@ -457,7 +482,6 @@ If Trim(fileText) = "" Then
     MsgBox "The converted Bjorn CSV is empty.", vbCritical, "Sales Analysis"
     WScript.Quit 1
 End If
-
 
 fileText = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
 lines = Split(fileText, vbLf)
@@ -594,11 +618,15 @@ lines = ""
 headerFields = ""
 columnCount = ""
 
-in_Xlsx_file = inputFolder & "\Orders - Export Control not yet in SL 1507.xlsx"
+in_Xlsx_file = FindSingleXlsx(inFolderEcNotInSLPath, "EC not in SL")
+If in_Xlsx_file = "" Then
+    MsgBox "Put exactly one xlsx file in Input\ECNotInSL File.", vbCritical, "Sales Analysis"
+    WScript.Quit 1
+End If
 out_Csv_file = outputFolder & "\ExportControlNotInSL.csv"
 
 If XlsxToCsv(in_Xlsx_file, 1, 4, 1, 0, delimiter, out_Csv_file) < 0 Then
-    MsgBox "Could not convert ECnotInSL file -add filename. See log.", vbCritical, "Sales Analysis"
+    MsgBox "Could not convert EC not in SL file -add filename. See log.", vbCritical, "Sales Analysis"
     WScript.Quit 1
 End If
 
@@ -805,6 +833,38 @@ Next
 
 WriteLog "OtherForcast&NRC: kept " & forecastDict.Count & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
+'############################# AOP -> master rows #############################
+
+Dim aopSource, aopMasterDict, aopSheetKeys, aopRowIn, aopKey
+Dim aopMonth, aopYear, rowsAop
+Set aopSource = inputData("AOP")
+Set aopMasterDict = CreateObject("Scripting.Dictionary")
+aopMasterDict.CompareMode = vbTextCompare
+rowsAop = 0
+aopSheetKeys = aopSource.Keys
+
+For n = 0 To UBound(aopSheetKeys)
+    Set aopRowIn = aopSource(aopSheetKeys(n))
+
+    ReDim masterRow(UBound(masterHeader))
+    For j = 0 To UBound(masterRow)
+        masterRow(j) = ""
+    Next
+    aopMonth = Trim(aopRowIn("Month"))
+    aopYear  = Trim(aopRowIn("Year"))
+    masterRow(M_STATUSSIOP) = "Target"
+    masterRow(M_FY) = Trim(aopRowIn("FY"))
+    masterRow(M_MONTH) = aopMonth
+    masterRow(M_YEAR) = aopYear
+    masterRow(M_MY) = Trim(aopRowIn("Concate"))
+    masterRow(M_NPUSD) = Replace(Trim(aopRowIn("AOP USD")), ",", ".")
+    aopKey = "AOP" & Chr(1) & aopMonth & Chr(1) & aopYear
+    aopMasterDict(aopKey) = masterRow
+    rowsAop = rowsAop + 1
+Next
+
+WriteLog "AOP: " & aopMasterDict.Count & " rows prepared for master"
+
 '############################# Merge sources into master #############################
 
 Dim sourceDicts, sourceNames, sourceDict, sourceKeys, sourceRowIn, existingRow
@@ -812,14 +872,14 @@ Dim outputBuffer, outputKeys, changedCols, valueOld, valueNew
 Dim rowsInserted, rowsUpdated, rowsUnchanged, changeLogged
 Dim d, k, n, c
 Dim preserveMasterOnBlank
+Dim usdValue, rowsNoUsd, rowsZeroUsd
 
 ' True - a blank incoming value leaves the master value alone.
 ' False - a blank incoming value overwrites the master value.
-preserveMasterOnBlank = True
-sourceDicts = Array(orderLinesDict, bjornDict, ecnisDict, forecastDict)
-sourceNames = Array("CustomerOrderLines", "Bjorn", "EC not in SL", "OtherForcast&NRC")
-
-rowsInserted = 0 : rowsUpdated = 0 : rowsUnchanged = 0 : changeLogged = 0
+preserveMasterOnBlank = False
+sourceDicts = Array(orderLinesDict, bjornDict, ecnisDict, forecastDict, aopMasterDict)
+sourceNames = Array("CustomerOrderLines", "Bjorn", "EC not in SL", "OtherForcast&NRC", "AOP")
+rowsInserted = 0 : rowsUpdated = 0 : rowsUnchanged = 0 : rowsSourceConflict = 0 : rowsNoUsd = 0 : rowsZeroUsd = 0
 
 For d = 0 To UBound(sourceDicts)
     Set sourceDict = sourceDicts(d)
@@ -828,22 +888,23 @@ For d = 0 To UBound(sourceDicts)
     For n = 0 To UBound(sourceKeys)
         k = sourceKeys(n)
         sourceRowIn = sourceDict(k)
+        usdValue = ToNumber(sourceRowIn(M_NPUSD))
 
-        If Not masterDict.Exists(k) Then
+        If IsNull(usdValue) Then
+            rowsNoUsd = rowsNoUsd + 1
+        ElseIf usdValue = 0 Then
+            rowsZeroUsd = rowsZeroUsd + 1
+        ElseIf Not masterDict.Exists(k) Then
             masterDict(k) = sourceRowIn
             rowsInserted = rowsInserted + 1
-
         Else
             existingRow = masterDict(k)
             changedCols = ""
 
             If Trim(sourceRowIn(M_STATUSSIOP)) <> "" Then
-                If StrComp(Trim(existingRow(M_STATUSSIOP)), _
-                           Trim(sourceRowIn(M_STATUSSIOP)), vbTextCompare) <> 0 Then
+                If StrComp(Trim(existingRow(M_STATUSSIOP)), Trim(sourceRowIn(M_STATUSSIOP)), vbTextCompare) <> 0 Then
                     rowsSourceConflict = rowsSourceConflict + 1
-                    WriteLog "CONFLICT " & Replace(k, Chr(1), " + ") & ": already '" & _
-                             existingRow(M_STATUSSIOP) & "', " & sourceNames(d) & _
-                             " reports '" & sourceRowIn(M_STATUSSIOP) & "'"
+                    WriteLog "CONFLICT " & Replace(k, Chr(1), " + ") & ": already '" & existingRow(M_STATUSSIOP) & "', " & sourceNames(d) & " reports '" & sourceRowIn(M_STATUSSIOP) & "'"
                 End If
             End If
 
@@ -872,10 +933,10 @@ For d = 0 To UBound(sourceDicts)
         End If
     Next
 
-    WriteLog "Merged " & sourceNames(d) & ": " & sourceDict.Count & " rows processed"
+    WriteLog "Merged " & sourceNames(d) & ": " & sourceDict.Count & " rows processed, " & (rowsSourceConflict - conflictsBefore) & " conflicts"
 Next
 
-WriteLog "Merge result: " & rowsInserted & " inserted, " & rowsUpdated & " updated, " &   rowsUnchanged & " unchanged | master now " & masterDict.Count & " rows"
+WriteLog "Merge result: " & rowsInserted & " inserted, " & rowsUpdated & " updated, " & rowsUnchanged & " unchanged, " & rowsSourceConflict & " conflicts, " & rowsNoUsd & " no USD, " & rowsZeroUsd & " zero USD | master now " & masterDict.Count & " rows"
 
 '############################# Status SIOP overrides #############################
 ' Rule: Name | Item | Order contains | Due Date beyond N months | new Status SIOP
@@ -960,12 +1021,7 @@ If Not WriteUtf8(masterCsvFile, Join(outputBuffer, vbCrLf) & vbCrLf) Then
 End If
 
 WriteLog "MasterData.csv written: " & masterDict.Count & " rows, " & (UBound(masterHeader) + 1) & " columns"
-
 MsgBox "Done." & vbCrLf & vbCrLf & "Inserted: " & rowsInserted & vbCrLf & "Updated:  " & rowsUpdated & vbCrLf & "Unchanged: " & rowsUnchanged & vbCrLf & "Total rows: " & masterDict.Count, vbInformation, "Sales Analysis"
-
-
-
-
 
 '#####################################################################################################################################
 '                                                               FUNCTIONS
@@ -1462,6 +1518,38 @@ Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, value
         End If
     Next
  
+End Function
+
+Function FindSingleXlsx(folderPath, folderLabel)
+
+    Dim oneFile, foundPath, foundCount, ext
+    FindSingleXlsx = ""
+    foundPath  = ""
+    foundCount = 0
+     If Not fso.FolderExists(folderPath) Then
+        WriteLog "Folder not found: " & folderPath
+        Exit Function
+     End If
+
+    For Each oneFile In fso.GetFolder(folderPath).Files
+        ext = LCase(fso.GetExtensionName(oneFile.Name))
+        If (ext = "xlsx" Or ext = "xlsm") And Left(oneFile.Name, 2) <> "~$" Then
+            foundCount = foundCount + 1
+            foundPath  = oneFile.Path
+        End If
+    Next
+
+    If foundCount = 0 Then
+        WriteLog folderLabel & ": no xlsx file found in " & folderPath
+    ElseIf foundCount > 1 Then
+        WriteLog folderLabel & ": " & foundCount & " xlsx files found in " & folderPath &  " - exactly one is required"
+        foundPath = ""
+    Else
+        WriteLog folderLabel & ": using " & fso.GetFileName(foundPath)
+    End If
+
+    FindSingleXlsx = foundPath
+
 End Function
 
 '#####################################################################################################################################
