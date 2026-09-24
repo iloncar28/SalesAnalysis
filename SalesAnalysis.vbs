@@ -1,7 +1,4 @@
 KillProcess("excel.exe")
-'napravit scriptu za izmjenu naziva kolona u skinutim fajlicama
-'dodat renaming klijenata u unificirani naziv isto u pre-skriptu
-'clean archive items how many?
 
 Dim colOrder, colLine, colStatus, colItem1, colItem2, colQtyOrdered, colUM
 Dim colUnitPrice, colOrderDate, colDueDate, colInvoiced, colName, colNetPrice, colCurrency
@@ -11,7 +8,7 @@ Dim idxOrder, idxLine, idxStatus, idxItem1, idxItem2, idxQtyOrdered, idxUM
 Dim idxUnitPrice, idxOrderDate, idxDueDate, idxInvoiced, idxName, idxNetPrice, idxCurrency
 Dim yearFrom, yearTo, dueYear, dueMonth, dateValue, statusValue, monthYear
 Dim qtyOrdered, invoiced, netPrice, converted, lookupValue
-Dim fxDict, orderTypeDict, aopDict, productLineDict
+Dim fxDict, orderTypeDict, aopDict, productLineDict, unifiedDict, rowsNameUnified
 Dim rowsKept, rowsOutOfWindow, rowsBadStatus, rowsPlannedZero, rowsDuplicate
 Dim rowsNoFY, rowsNoProductLine, rowsNoRate, j, masterHeader, masterDict
 'Dim masterSourceCols, mstrIdx, mstrLines, mstrFields, mstrHeaderIdx
@@ -23,6 +20,22 @@ Dim sheetNames, inputData, sheetData, missingSheets, sheetName, i
 Dim shell, rootFolder, masterCsvFile, in_Xlsx_file, out_Csv_file
 Dim fso, inputFolder, archiveFolder, outputFolder, delimiter, rowsSourceConflict
 Dim inputSubFolders, oneSub, inFolderCustomerOrderLinesPath, inFolderBjornPath, inFolderEcNotInSLPath
+Dim renameCols, renameFields, rn, unifiedName
+Dim bjornHeaderIndex, colCalendarYear, idxCalendarYear
+Dim forecastSource, forecastDict, forecastKeys, sourceRow, forecastKey
+Dim fcNetPrice, fcCurrency, fcMonth, fcYear
+Dim aopSource, aopMasterDict, aopSheetKeys, aopRowIn, aopKey
+Dim aopMonth, aopYear, rowsAop
+Dim sourceDicts, sourceNames, sourceDict, sourceKeys, sourceRowIn, existingRow
+Dim outputBuffer, outputKeys, changedCols, valueOld, valueNew
+Dim rowsInserted, rowsUpdated, rowsUnchanged, changeLogged
+Dim d, k, n, c
+Dim preserveMasterOnBlank
+Dim usdValue, rowsNoUsd, rowsZeroUsd
+Dim statusRules
+Dim ruleKeys, ruleRow, oneRule, ruleMatches, cutoffDate, rowsOverridden, r
+Dim xlsExcel, xlsBook, xlsSheet, xlsData, xlsFile
+Dim xlsKeys, xlsRow, xlsCol, xlsValues
 
 Const map_SHEET = 0
 Const map_HDRROW = 1
@@ -111,13 +124,15 @@ If fso.FileExists(masterCsvFile) Then
     On Error GoTo 0
     WriteLog "Backup: " & destArchFileLoc
 End If
+CleanArchive archiveFolder, "MasterData_", 5
 
 '############################################# Load all Input.xlsx sheets into Dictionary #############################################
 
 sheet_map = Array(Array("FX", 1, 2, 3, "From Currency|To Currency", "Value"),_
                   Array("OrderType", 1, 2, 2, "Spares customers", "Value"),_
                   Array("AOP", 1, 2, 5, "Concate", ""),_
-                  Array("OtherForcast&NRC", 1, 2, 10, "", ""),_
+                  Array("OtherForecast&NRC", 1, 2, 10, "", ""),_
+                  Array("UnifiedNames", 1, 2, 2, "Customer Names", "Unified Names"),_
                   Array("ProductLine", 1, 2, 3, "Desc", "Clasification"))
 
 inputBook = inputFolder & "\Input.xlsx"
@@ -281,6 +296,7 @@ Set fxDict = inputData("FX")
 Set orderTypeDict = inputData("OrderType")
 Set aopDict = inputData("AOP")
 Set productLineDict = inputData("ProductLine")
+Set unifiedDict = inputData("UnifiedNames")
 
 fileText = ReadUtf8(out_Csv_file)
 If Trim(fileText) = "" Then
@@ -291,6 +307,25 @@ End If
 
 fileText = Replace(Replace(fileText, vbCrLf, vbLf), vbCr, vbLf)
 lines = Split(fileText, vbLf)
+ 
+    'Array( 4, "Item"),        _   ' D
+    'Array(69, "Currency")     _   ' BQ
+renameCols = Array(Array( 4, "Item"), Array( 5, "Item_2"),Array(22, "Currency_2"),Array(69, "Currency"))
+renameFields = Split(Trim(lines(0)), delimiter)
+For rn = 0 To UBound(renameCols)
+    If renameCols(rn)(0) - 1 <= UBound(renameFields) Then
+        WriteLog "CustomerOrderLines: column " & renameCols(rn)(0) & " '" & renameFields(renameCols(rn)(0) - 1) & "' -> '" & renameCols(rn)(1) & "'"
+        renameFields(renameCols(rn)(0) - 1) = renameCols(rn)(1)
+    Else
+        WriteLog "CustomerOrderLines: column " & renameCols(rn)(0) & _
+                 " is past the end of the header - export layout changed"
+    End If
+Next
+
+lines(0)     = Join(renameFields, delimiter)
+headerFields = Split(Trim(lines(0)), delimiter)
+columnCount  = UBound(headerFields) + 1
+
 headerFields = Split(Trim(lines(0)), delimiter)
 columnCount = UBound(headerFields) + 1
 Set headerIndex = CreateObject("Scripting.Dictionary")
@@ -386,6 +421,10 @@ For i = 1 To UBound(lines)
         masterRow(M_UNITPRICE) = newRow(idxUnitPrice)
         masterRow(M_ORDERDATE) = newRow(idxOrderDate)
         masterRow(M_DUEDATE) = dateValue
+        If unifiedDict.Exists(Trim(newRow(idxName))) Then
+            newRow(idxName) = unifiedDict(Trim(newRow(idxName)))
+            rowsNameUnified = rowsNameUnified + 1
+        End If
         masterRow(M_NAME) = newRow(idxName)
         masterRow(M_NETPRICE) = newRow(idxNetPrice)
         masterRow(M_CURRENCY) = newRow(idxCurrency)
@@ -445,8 +484,6 @@ Next
 WriteLog "CustOrderLines: kept " & orderLinesDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 '############################################# Loading - Bjorn file #######################################################################################################################################
-Dim bjornHeaderIndex, colCalendarYear, idxCalendarYear
-
 fileText = ""
 lines = ""
 headerFields = ""
@@ -563,6 +600,10 @@ For i = 1 To UBound(lines)
     masterRow(M_UNITPRICE) = newRow(idxUnitPrice)
     masterRow(M_ORDERDATE) =  ""
     masterRow(M_DUEDATE) = dateValue
+    If unifiedDict.Exists(Trim(newRow(idxName))) Then
+        newRow(idxName) = unifiedDict(Trim(newRow(idxName)))
+        rowsNameUnified = rowsNameUnified + 1
+    End If
     masterRow(M_NAME) = newRow(idxName)
     masterRow(M_NETPRICE) = newRow(idxNetPrice)
     masterRow(M_CURRENCY) = "EUR"
@@ -665,13 +706,11 @@ For i = 0 To UBound(requiredCols)
     End If
 Next
 
-'idxItem1 = ecnislHeaderIndex(colItem1)
 idxItem2 = ecnislHeaderIndex(colItem2)
 idxName = ecnislHeaderIndex(colName)
 idxDueDate = ecnislHeaderIndex(colDueDate)
 idxNetPrice = ecnislHeaderIndex(colNetPrice)
 idxColCurrency = ecnislHeaderIndex(colCurrency)
-
 Set ecnisDict = CreateObject("Scripting.Dictionary")
 ecnisDict.CompareMode = vbTextCompare
 rowsKept = 0 : rowsOutOfWindow = 0 : rowsBadStatus = 0 : rowsPlannedZero = 0 : rowsDuplicate = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
@@ -705,7 +744,7 @@ For i = 1 To UBound(lines)
     masterRow(M_ORDER) = ""
     masterRow(M_LINE) = ""
     masterRow(M_STATUS) = ""
-    masterRow(M_STATUSSIOP) = "Other Forcast"
+    masterRow(M_STATUSSIOP) = "Other Forecast"
     masterRow(M_ORDERPOS) = ""
     masterRow(M_ITEM1) = ""
     masterRow(M_ITEM2) = newRow(idxItem2)
@@ -714,6 +753,10 @@ For i = 1 To UBound(lines)
     masterRow(M_UNITPRICE) = ""
     masterRow(M_ORDERDATE) =  ""
     masterRow(M_DUEDATE) = newRow(idxDueDate)
+    If unifiedDict.Exists(Trim(newRow(idxName))) Then
+        newRow(idxName) = unifiedDict(Trim(newRow(idxName)))
+        rowsNameUnified = rowsNameUnified + 1
+    End If
     masterRow(M_NAME) = newRow(idxName)
     masterRow(M_NETPRICE) = newRow(idxNetPrice)
     masterRow(M_CURRENCY) = newRow(idxColCurrency)
@@ -756,22 +799,19 @@ For i = 1 To UBound(lines)
 
     masterRow(M_QTYDIFF) = ""
 
-    keyValue = UCase(newRow(idxItem2)) & Chr(1) & UCase(newRow(idxDueDate)) & UCase(newRow(idxName))
-    If ecnisDict.Exists(keyValue) Then rowsDuplicate = rowsDuplicate + 1
+    ecnisKey = "EC" & Chr(1) & UCase(Trim(newRow(idxItem2))) & Chr(1) & monthYear & Chr(1) & UCase(Trim(newRow(idxName)))
+    If ecnisDict.Exists(ecnisKey) Then rowsDuplicate = rowsDuplicate + 1
+    ecnisDict(UniqueKey(ecnisDict, ecnisKey)) = masterRow
 
-    ecnisDict(keyValue) = masterRow
     rowsKept = rowsKept + 1
  End If
 Next
 
 WriteLog "EC not in SL: kept " & ecnisDict.Count & " | out of window " & rowsOutOfWindow & " | status excluded " & rowsBadStatus & " | planned zero price " & rowsPlannedZero & " | duplicate keys " & rowsDuplicate & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
-'############################# OtherForcast&NRC -> master rows #############################
+'############################# OtherForecast&NRC -> master rows #############################
 
-Dim forecastSource, forecastDict, forecastKeys, sourceRow, forecastKey
-Dim fcNetPrice, fcCurrency, fcMonth, fcYear
-
-Set forecastSource = inputData("OtherForcast&NRC")
+Set forecastSource = inputData("OtherForecast&NRC")
 Set forecastDict = CreateObject("Scripting.Dictionary")
 forecastDict.CompareMode = vbTextCompare
 rowsKept = 0 : rowsNoFY = 0 : rowsNoProductLine = 0 : rowsNoRate = 0
@@ -785,10 +825,15 @@ For n = 0 To UBound(forecastKeys)
         masterRow(j) = ""
     Next
 
-    masterRow(M_STATUSSIOP) = "Other Forcast"
+    masterRow(M_STATUSSIOP) = "Other Forecast"
     masterRow(M_ITEM1) = sourceRow("Item 1")
     masterRow(M_ITEM2) = sourceRow("Item 2")
-    masterRow(M_NAME) = sourceRow("Name (customer)")
+    unifiedName = Trim(sourceRow("Name (customer)"))
+    If unifiedDict.Exists(unifiedName) Then
+        unifiedName = unifiedDict(unifiedName)
+        rowsNameUnified = rowsNameUnified + 1
+    End If
+    masterRow(M_NAME) = unifiedName
     masterRow(M_ORDERTYPE) = sourceRow("Order Type")
     masterRow(M_NETPRICE) = sourceRow("Net Price")
     masterRow(M_CURRENCY) = sourceRow("Currency")
@@ -826,17 +871,16 @@ For n = 0 To UBound(forecastKeys)
         End If
     End If
 
-    forecastKey = "FC" & Chr(1) & UCase(Trim(sourceRow("Item 1"))) & Chr(1) & monthYear & Chr(1) & UCase(Trim(sourceRow("Name (customer)")))
+    forecastKey = UniqueKey(forecastDict, "FC" & Chr(1) & UCase(Trim(sourceRow("Item 1"))) & Chr(1) & monthYear & Chr(1) & UCase(unifiedName))
     forecastDict(forecastKey) = masterRow
     rowsKept = rowsKept + 1
 Next
 
-WriteLog "OtherForcast&NRC: kept " & forecastDict.Count & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
+WriteLog "OtherForecast&NRC: kept " & forecastDict.Count & " | no FY " & rowsNoFY & " | no product line " & rowsNoProductLine & " | no FX rate " & rowsNoRate
 
 '############################# AOP -> master rows #############################
 
-Dim aopSource, aopMasterDict, aopSheetKeys, aopRowIn, aopKey
-Dim aopMonth, aopYear, rowsAop
+
 Set aopSource = inputData("AOP")
 Set aopMasterDict = CreateObject("Scripting.Dictionary")
 aopMasterDict.CompareMode = vbTextCompare
@@ -858,7 +902,7 @@ For n = 0 To UBound(aopSheetKeys)
     masterRow(M_YEAR) = aopYear
     masterRow(M_MY) = Trim(aopRowIn("Concate"))
     masterRow(M_NPUSD) = Replace(Trim(aopRowIn("AOP USD")), ",", ".")
-    aopKey = "AOP" & Chr(1) & aopMonth & Chr(1) & aopYear
+    aopKey = UniqueKey(aopMasterDict, "AOP" & Chr(1) & aopMonth & Chr(1) & aopYear)
     aopMasterDict(aopKey) = masterRow
     rowsAop = rowsAop + 1
 Next
@@ -866,19 +910,9 @@ Next
 WriteLog "AOP: " & aopMasterDict.Count & " rows prepared for master"
 
 '############################# Merge sources into master #############################
-
-Dim sourceDicts, sourceNames, sourceDict, sourceKeys, sourceRowIn, existingRow
-Dim outputBuffer, outputKeys, changedCols, valueOld, valueNew
-Dim rowsInserted, rowsUpdated, rowsUnchanged, changeLogged
-Dim d, k, n, c
-Dim preserveMasterOnBlank
-Dim usdValue, rowsNoUsd, rowsZeroUsd
-
-' True - a blank incoming value leaves the master value alone.
-' False - a blank incoming value overwrites the master value.
 preserveMasterOnBlank = False
 sourceDicts = Array(orderLinesDict, bjornDict, ecnisDict, forecastDict, aopMasterDict)
-sourceNames = Array("CustomerOrderLines", "Bjorn", "EC not in SL", "OtherForcast&NRC", "AOP")
+sourceNames = Array("CustomerOrderLines", "Bjorn", "EC not in SL", "OtherForecast&NRC", "AOP")
 rowsInserted = 0 : rowsUpdated = 0 : rowsUnchanged = 0 : rowsSourceConflict = 0 : rowsNoUsd = 0 : rowsZeroUsd = 0
 
 For d = 0 To UBound(sourceDicts)
@@ -939,8 +973,6 @@ Next
 WriteLog "Merge result: " & rowsInserted & " inserted, " & rowsUpdated & " updated, " & rowsUnchanged & " unchanged, " & rowsSourceConflict & " conflicts, " & rowsNoUsd & " no USD, " & rowsZeroUsd & " zero USD | master now " & masterDict.Count & " rows"
 
 '############################# Status SIOP overrides #############################
-' Rule: Name | Item | Order contains | Due Date beyond N months | new Status SIOP
-Dim statusRules
 statusRules = Array(Array("Airbus Operations GMBH", "", "P", 0, "SL Forecast"), _
                     Array("GOODRICH ACTUATION", "", "A", 0, "SL Forecast"), _
                     Array("ROLLS ROYCE", "", "",  3, "SL Forecast"), _
@@ -951,8 +983,6 @@ Const RULE_ITEM     = 1
 Const RULE_ORDER    = 2
 Const RULE_MONTHS   = 3
 Const RULE_STATUS   = 4
-
-Dim ruleKeys, ruleRow, oneRule, ruleMatches, cutoffDate, rowsOverridden, r
 cutoffDate = ""
 rowsOverridden = 0
 ruleKeys = masterDict.Keys
@@ -1021,7 +1051,64 @@ If Not WriteUtf8(masterCsvFile, Join(outputBuffer, vbCrLf) & vbCrLf) Then
 End If
 
 WriteLog "MasterData.csv written: " & masterDict.Count & " rows, " & (UBound(masterHeader) + 1) & " columns"
-MsgBox "Done." & vbCrLf & vbCrLf & "Inserted: " & rowsInserted & vbCrLf & "Updated:  " & rowsUpdated & vbCrLf & "Unchanged: " & rowsUnchanged & vbCrLf & "Total rows: " & masterDict.Count, vbInformation, "Sales Analysis"
+
+'############################# Export MasterData.xlsx #############################
+xlsFile = rootFolder & "MasterData.xlsx"
+On Error Resume Next
+Set xlsExcel = CreateObject("Excel.Application")
+xlsExcel.Visible = False
+xlsExcel.DisplayAlerts = False
+xlsExcel.EnableEvents = False
+xlsExcel.ScreenUpdating = False
+Err.Clear
+
+Set xlsBook  = xlsExcel.Workbooks.Add
+Set xlsSheet = xlsBook.Worksheets(1)
+xlsSheet.Name = "MasterData"
+
+If Err.Number <> 0 Then
+    WriteLog "xlsx export: could not start Excel - " & Err.Description
+    CleanUpExcel xlsExcel, xlsBook
+    Err.Clear
+Else
+    xlsKeys = masterDict.Keys
+    ReDim xlsData(masterDict.Count, UBound(masterHeader))
+
+    For xlsCol = 0 To UBound(masterHeader)
+        xlsData(0, xlsCol) = masterHeader(xlsCol)
+    Next
+    For n = 0 To UBound(xlsKeys)
+        xlsValues = masterDict(xlsKeys(n))
+        For xlsCol = 0 To UBound(masterHeader)
+            xlsData(n + 1, xlsCol) = xlsValues(xlsCol)
+        Next
+    Next
+
+    xlsSheet.Range(xlsSheet.Cells(1, 1), xlsSheet.Cells(masterDict.Count + 1, UBound(masterHeader) + 1)).Value = xlsData
+    xlsSheet.Rows(1).Font.Bold = True
+    xlsSheet.Range(xlsSheet.Cells(1, 1), xlsSheet.Cells(1, UBound(masterHeader) + 1)).AutoFilter
+    xlsExcel.ActiveWindow.FreezePanes = False
+    xlsSheet.Range("A2").Select
+    xlsExcel.ActiveWindow.FreezePanes = True
+    xlsSheet.Columns.AutoFit
+
+    If fso.FileExists(xlsFile) Then fso.DeleteFile xlsFile, True
+    xlsBook.SaveAs xlsFile, 51
+
+    If Err.Number <> 0 Then
+        WriteLog "xlsx export failed: " & Err.Description
+        Err.Clear
+    Else
+        WriteLog "MasterData.xlsx written: " & masterDict.Count & " rows"
+    End If
+    CleanUpExcel xlsExcel, xlsBook
+End If
+
+On Error GoTo 0
+
+MsgBox "Done." & vbCrLf & vbCrLf & "Inserted:   " & rowsInserted & vbCrLf & "Updated:    " & rowsUpdated & vbCrLf & _
+       "Unchanged:  " & rowsUnchanged & vbCrLf & "Conflicts:  " & rowsSourceConflict & vbCrLf & vbCrLf & "Skipped - no USD value: " & rowsNoUsd & vbCrLf & _
+       "Skipped - zero USD:     " & rowsZeroUsd & vbCrLf & vbCrLf & "Status SIOP overrides:  " & rowsOverridden & vbCrLf & vbCrLf & "Total rows in MasterData.csv: " & masterDict.Count, vbInformation, "Sales Analysis"
 
 '#####################################################################################################################################
 '                                                               FUNCTIONS
@@ -1347,10 +1434,6 @@ Function P2(in_number)
 
 End Function
 
-'------------------------------------------------------------------------------
-' Converts an amount between currencies using the FX rates already loaded
-'   fxDict - pass inputData("FX")
-'------------------------------------------------------------------------------
 Function ConvertCurrency(inputCurrency, targetCurrency, amount, fxDict)
 
     Dim lookupKey, rate, value
@@ -1520,6 +1603,17 @@ Function ReadSheet(dvsWs, headerRow, firstDataRow, lastColumn, keyColumns, value
  
 End Function
 
+Function UniqueKey(targetDict, baseKey)
+    Dim candidate, n
+    candidate = baseKey
+    n = 1
+    Do While targetDict.Exists(candidate)
+        n = n + 1
+        candidate = baseKey & Chr(1) & "#" & n
+    Loop
+    UniqueKey = candidate
+End Function
+
 Function FindSingleXlsx(folderPath, folderLabel)
 
     Dim oneFile, foundPath, foundCount, ext
@@ -1551,5 +1645,51 @@ Function FindSingleXlsx(folderPath, folderLabel)
     FindSingleXlsx = foundPath
 
 End Function
+
+Sub CleanArchive(folderPath, filePrefix, keepCount)
+
+    Dim oneFile, names, count, i, j, swap, deleted
+
+    If Not fso.FolderExists(folderPath) Then Exit Sub
+
+    count = 0
+    ReDim names(255)
+
+    For Each oneFile In fso.GetFolder(folderPath).Files
+        If StrComp(Left(oneFile.Name, Len(filePrefix)), filePrefix, vbTextCompare) = 0 Then
+            If count > UBound(names) Then ReDim Preserve names(count * 2)
+            names(count) = oneFile.Name
+            count = count + 1
+        End If
+    Next
+
+    If count <= keepCount Then Exit Sub
+    ReDim Preserve names(count - 1)
+
+    ' descending, so the newest land at the front
+    For i = 0 To count - 2
+        For j = 0 To count - 2 - i
+            If names(j) < names(j + 1) Then
+                swap = names(j) : names(j) = names(j + 1) : names(j + 1) = swap
+            End If
+        Next
+    Next
+
+    deleted = 0
+    On Error Resume Next
+    For i = keepCount To count - 1
+        fso.DeleteFile fso.BuildPath(folderPath, names(i)), True
+        If Err.Number = 0 Then
+            deleted = deleted + 1
+        Else
+            WriteLog "Could not delete " & names(i) & ": " & Err.Description
+            Err.Clear
+        End If
+    Next
+    On Error GoTo 0
+
+    WriteLog "Archive cleaned: kept " & keepCount & ", deleted " & deleted
+
+End Sub
 
 '#####################################################################################################################################
