@@ -1191,7 +1191,9 @@ Function XlsxToCsv(srcBook, sheetName, headerRow, firstCol, lastCol, sDelim, dst
 End Function
 
 Function IsoDate(inputDate)
+
     IsoDate = Year(inputDate) & "-" & P2(Month(inputDate)) & "-" & P2(Day(inputDate))
+    
 End Function
 
 Function BuildHeaderLine(arrHdr, nCols, sDelim)
@@ -1649,12 +1651,10 @@ End Function
 Sub CleanArchive(folderPath, filePrefix, keepCount)
 
     Dim oneFile, names, count, i, j, swap, deleted
-
     If Not fso.FolderExists(folderPath) Then Exit Sub
 
     count = 0
     ReDim names(255)
-
     For Each oneFile In fso.GetFolder(folderPath).Files
         If StrComp(Left(oneFile.Name, Len(filePrefix)), filePrefix, vbTextCompare) = 0 Then
             If count > UBound(names) Then ReDim Preserve names(count * 2)
@@ -1665,8 +1665,6 @@ Sub CleanArchive(folderPath, filePrefix, keepCount)
 
     If count <= keepCount Then Exit Sub
     ReDim Preserve names(count - 1)
-
-    ' descending, so the newest land at the front
     For i = 0 To count - 2
         For j = 0 To count - 2 - i
             If names(j) < names(j + 1) Then
